@@ -80,7 +80,7 @@ def classify_customer(inv):
     vat_id = (inv.get("customer_vat_id") or "").strip()
     name = (inv.get("customer_name") or "").lower()
 
-    company_keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc"]
+    company_keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc", "sa", "bv", "sprl"]
 
     if vat_id:
         return "B2B"
@@ -92,7 +92,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU COUNTRIES
+# EU LIST
 # =========================
 EU_COUNTRIES = {
     "germany", "france", "italy", "spain", "netherlands",
@@ -101,7 +101,7 @@ EU_COUNTRIES = {
 
 
 # =========================
-# REGION LOGIC
+# REGION CLASSIFICATION (FIXED)
 # =========================
 def get_region(supplier, customer):
     supplier = (supplier or "").lower()
@@ -117,27 +117,31 @@ def get_region(supplier, customer):
 
 
 # =========================
-# FIXED REVERSE CHARGE LOGIC
+# FIXED REVERSE CHARGE LOGIC (IMPORTANT)
 # =========================
 def is_reverse_charge(inv, customer_type):
     supplier = (inv.get("supplier_country") or "").lower()
     customer = (inv.get("customer_country") or "").lower()
+    vat_id = (inv.get("customer_vat_id") or "").strip()
 
     # ❌ NEVER reverse charge for domestic invoices
     if supplier == customer:
         return False
 
-    # ✔️ Only cross-border EU B2B with VAT ID
-    return (
+    # ✔ Only EU cross-border B2B with VAT ID
+    if (
         supplier in EU_COUNTRIES and
         customer in EU_COUNTRIES and
         customer_type == "B2B" and
-        inv.get("customer_vat_id")
-    )
+        vat_id
+    ):
+        return True
+
+    return False
 
 
 # =========================
-# VAT rules Germany
+# VAT rules (Germany default model)
 # =========================
 def get_vat_rate(category="standard"):
     category = (category or "").lower()
@@ -192,7 +196,7 @@ def run_engine(inv):
 # =========================
 st.set_page_config(page_title="VAT Checker", layout="centered")
 
-st.title("📄 Germany VAT Invoice Checker")
+st.title("📄 EU VAT Invoice Checker (Fixed Logic)")
 
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
