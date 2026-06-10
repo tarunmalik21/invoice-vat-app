@@ -92,7 +92,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU detection
+# EU COUNTRIES
 # =========================
 EU_COUNTRIES = {
     "germany", "france", "italy", "spain", "netherlands",
@@ -100,6 +100,9 @@ EU_COUNTRIES = {
 }
 
 
+# =========================
+# REGION LOGIC (UPDATED)
+# =========================
 def get_region(supplier, customer):
     supplier = (supplier or "").lower()
     customer = (customer or "").lower()
@@ -108,7 +111,7 @@ def get_region(supplier, customer):
         return "Domestic"
 
     if supplier in EU_COUNTRIES and customer in EU_COUNTRIES:
-        return "EU"
+        return "Non-Domestic-EU"
 
     return "Non-EU"
 
@@ -129,7 +132,7 @@ def is_reverse_charge(inv, customer_type):
 
 
 # =========================
-# VAT rules (Germany)
+# VAT rules Germany
 # =========================
 def get_vat_rate(category="standard"):
     category = (category or "").lower()
@@ -148,12 +151,11 @@ def get_vat_rate(category="standard"):
 # =========================
 def validate_vat(net, tax, rate):
     expected = round(net * rate, 2)
-
     return abs(expected - tax) < 0.02
 
 
 # =========================
-# CLEAN ENGINE
+# ENGINE
 # =========================
 def run_engine(inv):
 
@@ -199,11 +201,9 @@ if uploaded_file:
     try:
         inv = extract_invoice_data(text)
 
-        st.success("Analysis Running...")
-
         result = run_engine(inv)
 
-        st.subheader("📊 VAT Decision")
+        st.subheader("📊 VAT Decision Result")
 
         st.write(f"👤 Customer Type: **{result['customer_type']}**")
         st.write(f"🌍 Region: **{result['region']}**")
