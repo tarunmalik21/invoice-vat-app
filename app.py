@@ -18,18 +18,7 @@ def extract_text_from_pdf(file):
 
 
 # =========================
-# safe JSON parser
-# =========================
-def safe_json_load(raw):
-    try:
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        return json.loads(raw)
-    except Exception:
-        return None
-
-
-# =========================
-# amount parser
+# safe amount parser
 # =========================
 def parse_amount(value):
     if value is None:
@@ -59,15 +48,14 @@ def parse_amount(value):
 # =========================
 def extract_invoice_data(text):
     prompt = f"""
-You are a strict invoice parser.
+Extract invoice data and return ONLY valid JSON.
 
-Return ONLY valid JSON:
-
+Fields:
 supplier_name, supplier_country, supplier_vat_id,
 customer_name, customer_country, customer_vat_id,
 invoice_number, invoice_date, currency,
 net_amount, tax_amount, gross_amount,
-items (array with category field if possible)
+items (array with category if possible)
 
 Invoice:
 {text}
@@ -80,25 +68,23 @@ Invoice:
     )
 
     raw = response.choices[0].message.content
-    data = safe_json_load(raw)
+    raw = raw.replace("```json", "").replace("```", "").strip()
 
-    if not data:
-        raise ValueError("Failed to parse invoice JSON")
-
-    return data
+    return json.loads(raw)
 
 
 # =========================
-# B2B / B2C classifier
+# CUSTOMER CLASSIFIER
 # =========================
 def classify_customer(inv):
     vat_id = (inv.get("customer_vat_id") or "").strip()
     name = (inv.get("customer_name") or "").lower()
 
+    company_keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc"]
+
     if vat_id:
         return "B2B"
 
-    company_keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc"]
     if any(k in name for k in company_keywords):
         return "B2B"
 
@@ -106,13 +92,30 @@ def classify_customer(inv):
 
 
 # =========================
-# EU reverse charge logic
+# EU detection
 # =========================
 EU_COUNTRIES = {
     "germany", "france", "italy", "spain", "netherlands",
     "austria", "belgium", "poland", "portugal", "czech republic"
 }
 
+
+def get_region(supplier, customer):
+    supplier = (supplier or "").lower()
+    customer = (customer or "").lower()
+
+    if supplier == customer:
+        return "Domestic"
+
+    if supplier in EU_COUNTRIES and customer in EU_COUNTRIES:
+        return "EU"
+
+    return "Non-EU"
+
+
+# =========================
+# Reverse charge logic
+# =========================
 def is_reverse_charge(inv, customer_type):
     supplier = (inv.get("supplier_country") or "").lower()
     customer = (inv.get("customer_country") or "").lower()
@@ -126,7 +129,7 @@ def is_reverse_charge(inv, customer_type):
 
 
 # =========================
-# VAT rate engine (Germany)
+# VAT rules (Germany)
 # =========================
 def get_vat_rate(category="standard"):
     category = (category or "").lower()
@@ -143,62 +146,46 @@ def get_vat_rate(category="standard"):
 # =========================
 # VAT validation
 # =========================
-def validate_vat(net, tax, expected_rate):
-    expected_tax = round(net * expected_rate, 2)
+def validate_vat(net, tax, rate):
+    expected = round(net * rate, 2)
 
-    return {
-        "expected_tax": expected_tax,
-        "actual_tax": tax,
-        "is_correct": abs(expected_tax - tax) < 0.02
-    }
+    return abs(expected - tax) < 0.02
 
 
 # =========================
-# FULL ENGINE
+# CLEAN ENGINE
 # =========================
-def run_vat_engine(inv):
+def run_engine(inv):
 
     customer_type = classify_customer(inv)
+    region = get_region(inv.get("supplier_country"), inv.get("customer_country"))
     reverse_charge = is_reverse_charge(inv, customer_type)
 
     net = parse_amount(inv.get("net_amount"))
     tax = parse_amount(inv.get("tax_amount"))
 
-    # category (fallback safe)
     category = "standard"
     if isinstance(inv.get("items"), list) and inv["items"]:
         category = inv["items"][0].get("category", "standard")
 
     vat_rate = 0.0 if reverse_charge else get_vat_rate(category)
 
-    validation = validate_vat(net, tax, vat_rate)
-
-    warnings = []
-
-    if not validation["is_correct"]:
-        warnings.append("VAT mismatch detected")
-
-    if reverse_charge and tax > 0:
-        warnings.append("Reverse charge expected but VAT charged")
+    vat_correct = validate_vat(net, tax, vat_rate)
 
     return {
         "customer_type": customer_type,
+        "region": region,
         "reverse_charge": reverse_charge,
-        "vat_rate": vat_rate,
-        "net": net,
-        "tax": tax,
-        "validation": validation,
-        "warnings": warnings,
-        "status": "OK" if validation["is_correct"] else "ERROR"
+        "vat_correct": vat_correct
     }
 
 
 # =========================
 # STREAMLIT UI
 # =========================
-st.set_page_config(page_title="VAT Checker", layout="wide")
+st.set_page_config(page_title="VAT Checker", layout="centered")
 
-st.title("📄 Germany VAT Invoice Checker (Upgraded)")
+st.title("📄 Germany VAT Invoice Checker")
 
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
@@ -211,20 +198,22 @@ if uploaded_file:
 
     try:
         inv = extract_invoice_data(text)
-        st.subheader("📦 Extracted Invoice")
-        st.json(inv)
 
-        st.subheader("🧠 VAT Analysis")
+        st.success("Analysis Running...")
 
-        result = run_vat_engine(inv)
-        st.json(result)
+        result = run_engine(inv)
 
-        if result["warnings"]:
-            st.warning(result["warnings"])
+        st.subheader("📊 VAT Decision")
+
+        st.write(f"👤 Customer Type: **{result['customer_type']}**")
+        st.write(f"🌍 Region: **{result['region']}**")
+        st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
+        st.write(f"💰 VAT Correct: **{'YES' if result['vat_correct'] else 'NO'}**")
+
+        if result["vat_correct"]:
+            st.success("✅ Invoice is compliant")
         else:
-            st.success("No issues detected")
-
-        st.success("Done")
+            st.warning("⚠️ Invoice needs review")
 
     except Exception as e:
         st.error(f"Error: {e}")
