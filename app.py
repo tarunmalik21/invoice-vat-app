@@ -2,18 +2,17 @@ import streamlit as st
 from vat_engine import analyze_invoice
 import fitz  # PyMuPDF
 from PIL import Image
-import pytesseract
 
 st.set_page_config(page_title="VAT Invoice Checker", layout="centered")
 
 st.title("VAT Decision Result")
 
 uploaded_file = st.file_uploader(
-    "Upload Invoice (PDF / Image)",
+    "Upload Invoice (PDF only recommended)",
     type=["pdf", "png", "jpg", "jpeg"]
 )
 
-# ---------------- OCR FUNCTIONS ---------------- #
+# ---------------- PDF OCR ---------------- #
 
 def extract_pdf(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
@@ -22,31 +21,31 @@ def extract_pdf(file):
         text += page.get_text()
     return text
 
+# ---------------- IMAGE OCR (SAFE FALLBACK) ---------------- #
+
 def extract_image(file):
-    return pytesseract.image_to_string(Image.open(file))
+    return "IMAGE OCR DISABLED - PLEASE USE PDF FILE FOR ACCURATE RESULTS"
 
 # ---------------- MAIN FLOW ---------------- #
 
 if uploaded_file:
 
-    st.success("File uploaded successfully ✔")
+    st.success("File uploaded ✔")
 
-    file_type = uploaded_file.type
-
-    if file_type == "application/pdf":
+    if uploaded_file.type == "application/pdf":
         text = extract_pdf(uploaded_file)
     else:
         text = extract_image(uploaded_file)
 
-    st.subheader("OCR Extracted Text")
-    st.text_area("", text, height=250)
+    st.subheader("Extracted Text")
+    st.text_area("OCR Output", text, height=250)
 
-    st.write("OCR Length:", len(text))
+    st.write("Text Length:", len(text))
 
     if st.button("Analyze Invoice"):
 
         if not text.strip():
-            st.error("No text detected in invoice")
+            st.error("No readable text found in invoice")
         else:
             result = analyze_invoice(text)
 
