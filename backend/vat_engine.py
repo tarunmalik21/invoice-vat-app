@@ -23,7 +23,7 @@ COUNTRY_MAP = {
 NON_EU = {"NO", "CH", "GB", "US", "IN", "CN", "AE"}
 
 # =========================================================
-# SECTION SPLITTER (SELLER / BUYER SAFE)
+# SECTION SPLIT
 # =========================================================
 
 def extract_section(text, start_keywords, end_keywords):
@@ -31,64 +31,51 @@ def extract_section(text, start_keywords, end_keywords):
 
     for k in start_keywords:
         if k in text:
-            start_index = text.index(k)
-            section = text[start_index:]
+            start = text.index(k)
+            section = text[start:]
 
-            cut_positions = []
-            for end in end_keywords:
-                pos = section.find(end)
+            ends = []
+            for e in end_keywords:
+                pos = section.find(e)
                 if pos != -1:
-                    cut_positions.append(pos)
+                    ends.append(pos)
 
-            if cut_positions:
-                section = section[:min(cut_positions)]
+            if ends:
+                section = section[:min(ends)]
 
             return section.strip()
 
     return ""
 
 # =========================================================
-# VAT EXTRACTION
+# OCR ONLY: VAT RATE
+# =========================================================
+
+def extract_vat_rate(text):
+    match = re.search(r"(\d{1,2}(\.\d+)?)\s*%", text)
+    return float(match.group(1)) if match else None
+
+# =========================================================
+# OCR ONLY: VAT NUMBER
 # =========================================================
 
 def extract_vat(text):
     text = text.upper()
 
-    patterns = [
-        r"\bDE[0-9]{9}\b",
-        r"\bFR[0-9A-Z]{2}[0-9]{9}\b",
-        r"\bIT[0-9]{11}\b",
-        r"\bPL[0-9]{10}\b",
-        r"\bES[A-Z0-9]{9}\b",
-        r"\bSE[0-9]{12}\b",
-        r"\bNL[0-9A-Z]{9}B[0-9]{2}\b",
-    ]
+    pattern = r"\b([A-Z]{2}[0-9A-Z]{8,12})\b"
+    m = re.search(pattern, text)
 
-    for p in patterns:
-        m = re.search(p, text)
-        if m:
-            vat = m.group()
-            return vat, vat[:2]
-
-    label_patterns = [
-        r"VAT\s*ID[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
-        r"VAT\s*NUMBER[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
-        r"VAT\s*NO[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
-    ]
-
-    for p in label_patterns:
-        m = re.search(p, text)
-        if m:
-            vat = m.group(1)
-            return vat, vat[:2]
+    if m:
+        vat = m.group(1)
+        return vat, vat[:2]
 
     return None, None
 
 # =========================================================
-# COUNTRY NORMALIZATION
+# OCR ONLY: COUNTRY
 # =========================================================
 
-def normalize_country(text, vat_country=None):
+def extract_country(text, vat_country=None):
     text = text.upper()
 
     if vat_country:
@@ -101,14 +88,6 @@ def normalize_country(text, vat_country=None):
     return None
 
 # =========================================================
-# VAT RATE EXTRACTION (OCR PRIORITY)
-# =========================================================
-
-def extract_vat_rate(text):
-    match = re.search(r"(\d{1,2}(\.\d+)?)\s*%", text)
-    return float(match.group(1)) if match else None
-
-# =========================================================
 # B2B DETECTION
 # =========================================================
 
@@ -118,10 +97,10 @@ def is_b2b(text, vat):
     keywords = [
         "GMBH", "SARL", "SAS", "SA",
         "SRL", "SPA", "LTD", "LIMITED",
-        "SP Z OO", "AS", "AB", "BV", "NV", "OY"
+        "SP Z OO", "AS", "AB", "BV", "NV"
     ]
 
-    if vat and vat != "NONE":
+    if vat:
         return True
 
     return any(k in text for k in keywords)
@@ -130,7 +109,7 @@ def is_b2b(text, vat):
 # MAIN ENGINE
 # =========================================================
 
-def analyze_invoice(text: str):
+def analyze_invoice(text):
 
     text = text.upper()
 
@@ -151,112 +130,64 @@ def analyze_invoice(text: str):
     )
 
     # =====================================================
-    # VAT EXTRACTION
+    # 🥇 LAYER 1: OCR ONLY (NO LOGIC)
     # =====================================================
 
     supplier_vat, supplier_vat_country = extract_vat(seller_text)
     customer_vat, customer_vat_country = extract_vat(buyer_text)
 
+    supplier_country = extract_country(seller_text, supplier_vat_country)
+    customer_country = extract_country(buyer_text, customer_vat_country)
+
+    vat_rate = extract_vat_rate(text)
+
+    # FIX NULLS
     supplier_vat = supplier_vat if supplier_vat else "NONE"
     customer_vat = customer_vat if customer_vat else "NONE"
 
     # =====================================================
-    # COUNTRY DETECTION
-    # =====================================================
-
-    supplier_country = normalize_country(seller_text, supplier_vat_country)
-    customer_country = normalize_country(buyer_text, customer_vat_country)
-
-    # =====================================================
-    # VAT RATE (OCR PRIORITY FIELD)
-    # =====================================================
-
-    vat_rate = extract_vat_rate(text)
-
-    # =====================================================
-    # CUSTOMER TYPE
+    # 🥈 LAYER 2: BUSINESS LOGIC ONLY
     # =====================================================
 
     customer_type = "B2B" if is_b2b(buyer_text, customer_vat) else "B2C"
 
-    # =====================================================
-    # CROSS BORDER CHECK
-    # =====================================================
-
-    cross_border = (
-        customer_type == "B2B"
-        and supplier_country is not None
-        and customer_country is not None
-        and supplier_country != customer_country
-    )
-
-    # =====================================================
-    # RULE ENGINE (FINAL PRIORITY LOGIC)
-    # =====================================================
-
     reverse_charge = False
 
-    # 🥇 PRIORITY 1: OCR VAT EXISTS (OVERRIDES EVERYTHING)
-    if vat_rate is not None:
+    cross_border = (
+        supplier_country is not None and
+        customer_country is not None and
+        supplier_country != customer_country
+    )
 
+    # RULE 1: DOMESTIC
+    if customer_type == "B2B" and not cross_border:
         reverse_charge = False
-        vat_status = f"VAT CHARGED ({vat_rate}%)"
+        compliance = "COMPLIANT"
 
-        if supplier_vat == "NONE":
-            compliance = "NOT COMPLIANT"
-        else:
-            compliance = "COMPLIANT"
-
-    # 🥈 PRIORITY 2: CROSS BORDER B2B (ONLY IF NO VAT FOUND)
-    elif cross_border:
-
+    # RULE 2: CROSS BORDER B2B
+    elif customer_type == "B2B" and cross_border:
         reverse_charge = True
+        compliance = "COMPLIANT" if supplier_vat != "NONE" else "NOT COMPLIANT"
 
-        if supplier_vat == "NONE":
-            vat_status = "REVERSE CHARGE (0% VAT) - SELLER VAT MISSING"
-            compliance = "NOT COMPLIANT"
-        else:
-            vat_status = "REVERSE CHARGE (0% VAT)"
-            compliance = "COMPLIANT"
-
-    # 🥉 PRIORITY 3: DOMESTIC B2B
-    elif customer_type == "B2B" and supplier_country == customer_country:
-
-        reverse_charge = False
-
-        if supplier_vat == "NONE":
-            vat_status = "VAT CHARGED (DOMESTIC B2B - MISSING SELLER VAT)"
-            compliance = "NOT COMPLIANT"
-        else:
-            vat_status = "VAT CHARGED (DOMESTIC B2B)"
-            compliance = "COMPLIANT"
-
-    # NON-EU SUPPLIER
-    elif supplier_country in NON_EU:
-
-        reverse_charge = False
-        vat_status = "NON-EU SUPPLIER"
-        compliance = "REQUIRES REVIEW"
-
-    # B2C DEFAULT
+    # RULE 3: B2C
     else:
-
         reverse_charge = False
-        vat_status = "B2C VAT APPLIES"
         compliance = "COMPLIANT"
 
     # =====================================================
-    # OUTPUT
+    # OUTPUT (STRICT SEPARATION)
     # =====================================================
 
     return {
-        "customer_type": customer_type,
+        # OCR ONLY
         "supplier_country": supplier_country,
         "customer_country": customer_country,
         "supplier_vat": supplier_vat,
         "customer_vat": customer_vat,
         "vat_rate": vat_rate,
+
+        # LOGIC ONLY
+        "customer_type": customer_type,
         "reverse_charge": reverse_charge,
-        "vat_status": vat_status,
         "compliance": compliance
     }
