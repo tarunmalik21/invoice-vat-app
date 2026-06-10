@@ -17,7 +17,7 @@ st.write("🚀 App running...")
 
 
 # =========================
-# PDF EXTRACTION (TEXT + OCR)
+# PDF EXTRACTION
 # =========================
 def extract_text_from_pdf(file):
     file_bytes = file.read()
@@ -120,7 +120,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU COUNTRIES
+# EU SET
 # =========================
 EU = {"de", "fr", "it", "es", "be", "nl", "at", "pl", "pt", "cz"}
 
@@ -154,19 +154,20 @@ def is_vat_charged(inv):
 
 
 # =========================
-# TAX INFO
+# TAX INFO (FIXED)
 # =========================
 def get_tax_info(region):
-    if region == "Non-Domestic-EU":
-        return "Import VAT applicable (paid at EU customs, not on invoice)"
-    elif region == "Non-EU":
+
+    # ONLY show for Non-EU
+    if region == "Non-EU":
         return "0% VAT on invoice (export/import transaction). Customs VAT may apply separately"
-    else:
-        return "Standard EU VAT rules apply"
+
+    # hide for EU cases
+    return ""
 
 
 # =========================
-# ENGINE (FINAL AUDIT LOGIC)
+# ENGINE
 # =========================
 def run_engine(inv):
 
@@ -181,16 +182,16 @@ def run_engine(inv):
     vat_charged = is_vat_charged(inv)
 
     # =========================
-    # 🚨 RISK ENGINE
+    # RISK ENGINE
     # =========================
     errors = []
     warnings = []
 
-    # ❌ Non-EU VAT charged = ERROR
+    # ❌ Non-EU VAT charged
     if region == "Non-EU" and vat_charged:
         errors.append("🚨 VAT charged in Non-EU transaction (review required)")
 
-    # ⚠️ VAT missing = WARNING
+    # ⚠️ VAT missing
     if not vat_present:
         warnings.append("⚠️ VAT missing (supplier or customer VAT ID missing) – review needed")
 
@@ -241,24 +242,28 @@ if uploaded_file:
 
     st.write(f"👤 Customer Type: **{result['customer_type']}**")
     st.write(f"🌍 Region: **{result['region']}**")
-    st.write(f"🧾 Tax Info: **{result['tax_info']}**")
+
+    # only show tax info if not empty
+    if result["tax_info"]:
+        st.write(f"🧾 Tax Info: **{result['tax_info']}**")
+
     st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
     st.write(f"💰 VAT Present: **{'YES' if result['vat_present'] else 'NO'}**")
 
     # =========================
-    # 🚨 ERRORS
+    # ERRORS
     # =========================
     for e in result["errors"]:
         st.error(e)
 
     # =========================
-    # ⚠️ WARNINGS
+    # WARNINGS
     # =========================
     for w in result["warnings"]:
         st.warning(w)
 
     # =========================
-    # SUCCESS STATE
+    # SUCCESS
     # =========================
     if not result["errors"] and not result["warnings"]:
         st.success("✔ Invoice compliant (no issues detected)")
