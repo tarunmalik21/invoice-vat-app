@@ -11,8 +11,6 @@ uploaded_file = st.file_uploader(
     type=["pdf"]
 )
 
-# ---------------- PDF TEXT EXTRACTION ---------------- #
-
 def extract_pdf(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
     text = ""
@@ -20,29 +18,20 @@ def extract_pdf(file):
         text += page.get_text()
     return text
 
-# ---------------- MAIN FLOW ---------------- #
-
 if uploaded_file:
 
-    if uploaded_file.type != "application/pdf":
-        st.error("Please upload PDF invoice only")
-    else:
-        text = extract_pdf(uploaded_file)
+    text = extract_pdf(uploaded_file)
 
-        if st.button("Analyze Invoice"):
+    # AUTO RUN (NO BUTTON)
+    result = analyze_invoice(text)
 
-            result = analyze_invoice(text)
+    st.subheader("VAT Decision Result")
 
-            st.subheader("VAT Decision Result")
-
-            st.write("👤 Customer Type:", result["customer_type"])
-
-            st.write("🌍 Supplier Country:", result["supplier_country"])
-            st.write("🌍 Customer Country:", result["customer_country"])
-
-            st.write("🧾 Supplier VAT:", result["supplier_vat"])
-            st.write("🧾 Customer VAT:", result["customer_vat"])
-
-            st.write("🔁 Reverse Charge:", result["reverse_charge"])
-            st.write("💰 VAT Status:", result["vat_status"])
-            st.write("📊 Compliance:", result["compliance"])
+    st.write("👤 Customer Type:", result["customer_type"])
+    st.write("🌍 Seller Country:", result["supplier_country"])
+    st.write("🌍 Buyer Country:", result["customer_country"])
+    st.write("🧾 Seller VAT:", result["supplier_vat"])
+    st.write("🧾 Buyer VAT:", result["customer_vat"])
+    st.write("🔁 Reverse Charge:", result["reverse_charge"])
+    st.write("💰 VAT Status:", result["vat_status"])
+    st.write("📊 Compliance:", result["compliance"])
