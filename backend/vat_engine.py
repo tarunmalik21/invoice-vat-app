@@ -1,7 +1,7 @@
 import re
-print("🔥 VAT ENGINE ACTIVE - NEW CODE LOADED")
+
 # ----------------------------
-# 1. B2B COMPANY DETECTION
+# 1. B2B DETECTION
 # ----------------------------
 
 B2B_KEYWORDS = [
@@ -25,7 +25,32 @@ def classify_customer_type(text: str):
 
 
 # ----------------------------
-# 2. VAT EXTRACTION
+# 2. COUNTRY DETECTION (FIXED - KEY CHANGE)
+# ----------------------------
+
+def detect_country(text: str):
+    text = text.upper()
+
+    country_map = {
+        "GERMANY": "DE",
+        "FRANCE": "FR",
+        "ITALY": "IT",
+        "SPAIN": "ES",
+        "POLAND": "PL",
+        "NETHERLANDS": "NL",
+        "BELGIUM": "BE",
+        "AUSTRIA": "AT",
+    }
+
+    for name, code in country_map.items():
+        if name in text or code in text:
+            return code
+
+    return None
+
+
+# ----------------------------
+# 3. VAT EXTRACTION
 # ----------------------------
 
 VAT_PATTERN = {
@@ -50,54 +75,22 @@ def extract_vat(text: str):
 
 
 # ----------------------------
-# 3. SECTION EXTRACTION (simple but stable)
-# ----------------------------
-
-def extract_section(text, keyword):
-    lines = text.split("\n")
-    capture = False
-    buffer = []
-
-    for line in lines:
-        if keyword.upper() in line.upper():
-            capture = True
-            continue
-
-        if capture and any(x in line.upper() for x in ["SELLER", "BUYER", "SUPPLIER", "CUSTOMER"]):
-            if keyword.upper() not in line.upper():
-                break
-
-        if capture:
-            buffer.append(line)
-
-    return "\n".join(buffer)
-
-
-def extract_party_vat(text, role):
-    section = extract_section(text, role)
-    return extract_vat(section)
-
-
-# ----------------------------
 # 4. MAIN ENGINE
 # ----------------------------
 
 def analyze_invoice(text: str):
 
-    # Extract supplier & customer separately
-    supplier_vat, supplier_country = extract_party_vat(text, "SELLER")
-    customer_vat, customer_country = extract_party_vat(text, "BUYER")
+    text = text.upper()
 
-    # fallback if structure unclear
-    if not supplier_vat:
-        supplier_vat, supplier_country = extract_vat(text)
+    # FIX 1: proper country detection (NOT VAT-based)
+    supplier_country = detect_country(text)
+    customer_country = detect_country(text)
 
-    if not customer_vat:
-        customer_vat, customer_country = extract_vat(text)
+    # VAT extraction (optional validation)
+    supplier_vat, _ = extract_vat(text)
+    customer_vat, _ = extract_vat(text)
 
-    # ----------------------------
-    # CUSTOMER TYPE
-    # ----------------------------
+    # B2B / B2C
     customer_type = classify_customer_type(text)
 
     # ----------------------------
@@ -108,7 +101,7 @@ def analyze_invoice(text: str):
     compliance = "COMPLIANT"
 
     # ----------------------------
-    # EU LOGIC CORE
+    # CROSS BORDER CHECK
     # ----------------------------
 
     is_cross_border = (
@@ -118,26 +111,24 @@ def analyze_invoice(text: str):
     )
 
     # ----------------------------
-    # B2B RULES
+    # B2B RULES (EU CORE LOGIC)
     # ----------------------------
     if customer_type == "B2B":
 
-        # Case 1: cross-border EU service
         if is_cross_border:
             reverse_charge = True
             vat_status = "REVERSE CHARGE APPLIES"
 
-            # VAT missing = critical error
+            # if VAT is wrongly charged / missing logic issue
             if not customer_vat:
+                vat_status = "MISSING OR INVALID VAT"
                 compliance = "NOT COMPLIANT"
-                vat_status = "MISSING CUSTOMER VAT"
 
-        # Case 2: same country B2B
         else:
             reverse_charge = False
 
             if not customer_vat:
-                vat_status = "MISSING CUSTOMER VAT"
+                vat_status = "MISSING VAT"
                 compliance = "NOT COMPLIANT"
 
     # ----------------------------
@@ -145,19 +136,17 @@ def analyze_invoice(text: str):
     # ----------------------------
     else:
         reverse_charge = False
-
-        # If VAT wrongly applied in B2C, still basic check
         vat_status = "B2C TRANSACTION"
 
     # ----------------------------
-    # FINAL OUTPUT
+    # OUTPUT
     # ----------------------------
     return {
         "customer_type": customer_type,
-        "supplier_vat": supplier_vat,
-        "customer_vat": customer_vat,
         "supplier_country": supplier_country,
         "customer_country": customer_country,
+        "supplier_vat": supplier_vat,
+        "customer_vat": customer_vat,
         "reverse_charge": reverse_charge,
         "vat_status": vat_status,
         "compliance": compliance
