@@ -1,5 +1,5 @@
 import re
-
+print("🔥 VAT ENGINE ACTIVE - NEW CODE LOADED")
 # ----------------------------
 # 1. B2B COMPANY DETECTION
 # ----------------------------
