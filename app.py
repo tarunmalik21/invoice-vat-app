@@ -27,7 +27,7 @@ def parse_amount(value):
     value = str(value).strip()
     value = re.sub(r"[^\d,.\-]", "", value)
 
-    # EU format fix (1.000,00 → 1000.00)
+    # EU format fix: 1.000,00 → 1000.00
     if "," in value and "." in value:
         if value.rfind(",") > value.rfind("."):
             value = value.replace(".", "")
@@ -75,7 +75,7 @@ Invoice:
 
 
 # =========================
-# COUNTRY NORMALIZER (CRITICAL FIX)
+# COUNTRY NORMALIZER (FULL + SHORT CODES)
 # =========================
 def normalize_country(c):
     if not c:
@@ -84,16 +84,35 @@ def normalize_country(c):
     c = c.strip().lower()
 
     mapping = {
-        "germany": "germany", "de": "germany",
-        "france": "france", "fr": "france",
-        "italy": "italy", "it": "italy",
-        "spain": "spain", "es": "spain",
-        "netherlands": "netherlands", "nl": "netherlands",
-        "belgium": "belgium", "be": "belgium", "belgique": "belgium",
-        "austria": "austria", "at": "austria",
-        "poland": "poland", "pl": "poland",
-        "portugal": "portugal", "pt": "portugal",
-        "czech republic": "czech republic", "cz": "czech republic"
+        # Germany
+        "germany": "de", "de": "de",
+
+        # France
+        "france": "fr", "fr": "fr",
+
+        # Italy
+        "italy": "it", "it": "it",
+
+        # Spain
+        "spain": "es", "es": "es",
+
+        # Belgium
+        "belgium": "be", "be": "be",
+
+        # Netherlands
+        "netherlands": "nl", "nl": "nl",
+
+        # Austria
+        "austria": "at", "at": "at",
+
+        # Poland
+        "poland": "pl", "pl": "pl",
+
+        # Portugal
+        "portugal": "pt", "pt": "pt",
+
+        # Czech Republic
+        "czech republic": "cz", "cz": "cz"
     }
 
     return mapping.get(c, c)
@@ -118,16 +137,30 @@ def classify_customer(inv):
 
 
 # =========================
-# EU COUNTRIES (EXPANDED)
+# EU VAT RATES (BY COUNTRY CODE)
 # =========================
-EU_COUNTRIES = {
-    "germany", "france", "italy", "spain", "netherlands",
-    "austria", "belgium", "poland", "portugal", "czech republic"
+EU_VAT_RATES = {
+    "de": 0.19,
+    "fr": 0.20,
+    "it": 0.22,
+    "es": 0.21,
+    "be": 0.21,
+    "nl": 0.21,
+    "at": 0.20,
+    "pl": 0.23,
+    "pt": 0.23,
+    "cz": 0.21
 }
 
 
 # =========================
-# REGION LOGIC (FIXED)
+# EU SET
+# =========================
+EU_COUNTRIES = set(EU_VAT_RATES.keys())
+
+
+# =========================
+# REGION LOGIC
 # =========================
 def get_region(supplier, customer):
 
@@ -144,7 +177,7 @@ def get_region(supplier, customer):
 
 
 # =========================
-# REVERSE CHARGE (EU CORRECT RULE)
+# REVERSE CHARGE (EU RULES)
 # =========================
 def is_reverse_charge(inv, customer_type):
 
@@ -152,49 +185,33 @@ def is_reverse_charge(inv, customer_type):
     customer = normalize_country(inv.get("customer_country"))
     vat_id = (inv.get("customer_vat_id") or "").strip()
 
-    # ❌ NEVER reverse charge for domestic (IMPORTANT FIX)
+    # ❌ NEVER domestic reverse charge
     if supplier == customer:
         return False
 
-    # ✔ EU cross-border B2B ONLY
-    if (
+    # ✔ EU cross-border B2B only
+    return (
         supplier in EU_COUNTRIES and
         customer in EU_COUNTRIES and
         customer_type == "B2B" and
         vat_id
-    ):
-        return True
-
-    return False
+    )
 
 
 # =========================
-# VAT validation (simple correctness check)
+# VAT validation
 # =========================
 def validate_vat(net, tax, rate):
     expected = round(net * rate, 2)
-    return abs(expected - tax) < 0.05  # small tolerance for EU rounding
+    return abs(expected - tax) < 0.05
 
 
 # =========================
-# VAT RATE DETECTION (SAFE DEFAULT)
+# VAT lookup
 # =========================
-def detect_vat_rate(net, tax):
-    if net == 0:
-        return 0.0
-
-    actual = round(tax / net, 2)
-
-    if abs(actual - 0.07) < 0.02:
-        return 0.07
-
-    if abs(actual - 0.21) < 0.02:
-        return 0.21
-
-    if abs(actual - 0.19) < 0.02:
-        return 0.19
-
-    return actual
+def get_standard_vat(country):
+    country = normalize_country(country)
+    return EU_VAT_RATES.get(country)
 
 
 # =========================
@@ -209,9 +226,16 @@ def run_engine(inv):
     net = parse_amount(inv.get("net_amount"))
     tax = parse_amount(inv.get("tax_amount"))
 
-    detected_rate = detect_vat_rate(net, tax)
+    supplier_country = normalize_country(inv.get("supplier_country"))
 
-    vat_rate = 0.0 if reverse_charge else detected_rate
+    # VAT logic
+    if reverse_charge:
+        vat_rate = 0.0
+    else:
+        vat_rate = get_standard_vat(supplier_country)
+
+        if vat_rate is None:
+            vat_rate = tax / net if net else 0.0
 
     vat_correct = validate_vat(net, tax, vat_rate)
 
@@ -226,9 +250,9 @@ def run_engine(inv):
 # =========================
 # STREAMLIT UI
 # =========================
-st.set_page_config(page_title="EU VAT Checker", layout="centered")
+st.set_page_config(page_title="EU VAT Invoice Checker", layout="centered")
 
-st.title("📄 EU VAT Invoice Checker (Belgium + EU Correct)")
+st.title("📄 EU VAT Invoice Checker")
 
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
