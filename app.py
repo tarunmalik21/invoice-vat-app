@@ -1,5 +1,5 @@
 import streamlit as st
-from vat_engine
+from vat_engine import analyze_invoice
 import fitz  # PyMuPDF
 from PIL import Image
 import pytesseract
