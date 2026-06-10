@@ -17,7 +17,7 @@ st.write("🚀 App running...")
 
 
 # =========================
-# PDF TEXT EXTRACTION
+# PDF EXTRACTION
 # =========================
 def extract_text_from_pdf(file):
     file_bytes = file.read()
@@ -120,7 +120,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU COUNTRIES
+# EU SET
 # =========================
 EU = {"de", "fr", "it", "es", "be", "nl", "at", "pl", "pt", "cz"}
 
@@ -143,13 +143,13 @@ def get_region(supplier, customer):
 
 
 # =========================
-# TAX DESCRIPTION
+# TAX INFO
 # =========================
 def get_tax_info(region):
     if region == "Non-Domestic-EU":
         return "Import VAT applicable (paid at EU customs, not on invoice)"
     elif region == "Non-EU":
-        return "Import / Export transaction (0% invoice VAT, customs tax may apply)"
+        return "Import / Export transaction (0% VAT on invoice, customs tax may apply)"
     else:
         return "Standard EU VAT rules apply"
 
@@ -182,14 +182,16 @@ def run_engine(inv):
 # =========================
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
-
 if uploaded_file:
 
     st.success("File uploaded ✔")
 
     text = extract_text_from_pdf(uploaded_file)
 
-    st.write("📄 Extracted text length:", len(text))
+    st.subheader("📄 Extracted Text")
+    st.text(text)   # 👈 FULL TEXT SHOWN HERE
+
+    st.write("📏 Text length:", len(text))
 
     if len(text) < 10:
         st.error("No readable text found")
@@ -199,23 +201,18 @@ if uploaded_file:
 
     inv = extract_invoice_data(text)
 
-    # 🔒 Hidden debug JSON (NOT visible by default)
-    with st.expander("🔍 Developer View (JSON)"):
-        st.json(inv)
-
     st.info("Running VAT engine...")
 
     result = run_engine(inv)
 
     # =========================
-    # CLEAN SaaS OUTPUT
+    # CLEAN OUTPUT
     # =========================
     st.subheader("📊 Invoice Analysis")
 
     st.write(f"👤 Customer Type: **{result['customer_type']}**")
     st.write(f"🌍 Region: **{result['region']}**")
     st.write(f"🧾 Tax Info: **{result['tax_info']}**")
-
     st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
     st.write(f"💰 VAT Data Complete: **{'YES' if result['vat_present'] else 'NO'}**")
 
