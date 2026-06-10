@@ -154,20 +154,18 @@ def is_vat_charged(inv):
 
 
 # =========================
-# TAX INFO (FIXED)
+# TAX INFO (ONLY NON-EU)
 # =========================
 def get_tax_info(region):
 
-    # ONLY show for Non-EU
     if region == "Non-EU":
         return "0% VAT on invoice (export/import transaction). Customs VAT may apply separately"
 
-    # hide for EU cases
     return ""
 
 
 # =========================
-# ENGINE
+# ENGINE (FINAL RULES)
 # =========================
 def run_engine(inv):
 
@@ -181,15 +179,16 @@ def run_engine(inv):
     vat_present = bool(supplier_vat and customer_vat)
     vat_charged = is_vat_charged(inv)
 
-    # =========================
-    # RISK ENGINE
-    # =========================
     errors = []
     warnings = []
 
     # ❌ Non-EU VAT charged
     if region == "Non-EU" and vat_charged:
         errors.append("🚨 VAT charged in Non-EU transaction (review required)")
+
+    # ❌ Reverse charge but VAT charged
+    if reverse_charge and vat_charged:
+        errors.append("🚨 VAT shall be 0% under reverse charge (EU intra-community supply)")
 
     # ⚠️ VAT missing
     if not vat_present:
@@ -243,7 +242,6 @@ if uploaded_file:
     st.write(f"👤 Customer Type: **{result['customer_type']}**")
     st.write(f"🌍 Region: **{result['region']}**")
 
-    # only show tax info if not empty
     if result["tax_info"]:
         st.write(f"🧾 Tax Info: **{result['tax_info']}**")
 
