@@ -8,7 +8,7 @@ import pytesseract
 client = OpenAI()
 
 # =========================
-# APP UI
+# APP
 # =========================
 st.set_page_config(page_title="EU VAT Invoice Checker", layout="centered")
 st.title("📄 EU VAT Invoice Checker")
@@ -17,7 +17,7 @@ st.write("🚀 App running...")
 
 
 # =========================
-# PDF EXTRACTION
+# PDF TEXT EXTRACTION
 # =========================
 def extract_text_from_pdf(file):
     file_bytes = file.read()
@@ -120,7 +120,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU SET
+# EU COUNTRIES
 # =========================
 EU = {"de", "fr", "it", "es", "be", "nl", "at", "pl", "pt", "cz"}
 
@@ -143,13 +143,24 @@ def get_region(supplier, customer):
 
 
 # =========================
+# VAT CHECK
+# =========================
+def is_vat_charged(inv):
+    tax = inv.get("tax_amount")
+    try:
+        return float(tax) > 0
+    except:
+        return False
+
+
+# =========================
 # TAX INFO
 # =========================
 def get_tax_info(region):
     if region == "Non-Domestic-EU":
         return "Import VAT applicable (paid at EU customs, not on invoice)"
     elif region == "Non-EU":
-        return "Import / Export transaction (0% VAT on invoice, customs tax may apply)"
+        return "0% VAT on invoice (export/import transaction). Customs VAT may apply separately"
     else:
         return "Standard EU VAT rules apply"
 
@@ -167,12 +178,26 @@ def run_engine(inv):
 
     reverse_charge = region == "Non-Domestic-EU"
     vat_present = bool(supplier_vat and customer_vat)
+    vat_charged = is_vat_charged(inv)
+
+    # =========================
+    # 🚨 NON-EU VAT ERROR LOGIC
+    # =========================
+    vat_error = False
+    vat_warning_msg = ""
+
+    if region == "Non-EU" and vat_charged:
+        vat_error = True
+        vat_warning_msg = "🚨 VAT charged in Non-EU transaction (review required)"
 
     return {
         "customer_type": customer_type,
         "region": region,
         "reverse_charge": reverse_charge,
         "vat_present": vat_present,
+        "vat_charged": vat_charged,
+        "vat_error": vat_error,
+        "vat_warning_msg": vat_warning_msg,
         "tax_info": get_tax_info(region)
     }
 
@@ -189,7 +214,7 @@ if uploaded_file:
     text = extract_text_from_pdf(uploaded_file)
 
     st.subheader("📄 Extracted Text")
-    st.text(text)   # 👈 FULL TEXT SHOWN HERE
+    st.text(text)
 
     st.write("📏 Text length:", len(text))
 
@@ -206,7 +231,7 @@ if uploaded_file:
     result = run_engine(inv)
 
     # =========================
-    # CLEAN OUTPUT
+    # OUTPUT
     # =========================
     st.subheader("📊 Invoice Analysis")
 
@@ -214,9 +239,15 @@ if uploaded_file:
     st.write(f"🌍 Region: **{result['region']}**")
     st.write(f"🧾 Tax Info: **{result['tax_info']}**")
     st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
-    st.write(f"💰 VAT Data Complete: **{'YES' if result['vat_present'] else 'NO'}**")
+    st.write(f"💰 VAT Present: **{'YES' if result['vat_present'] else 'NO'}**")
 
-    if result["vat_present"]:
-        st.success("✅ VAT details complete")
+    # =========================
+    # 🚨 WARNING SYSTEM
+    # =========================
+    if result["vat_error"]:
+        st.error(result["vat_warning_msg"])
+
+    elif result["vat_charged"] and result["region"] == "Non-EU":
+        st.warning("⚠️ VAT detected in Non-EU transaction (verify compliance)")
     else:
-        st.warning("⚠️ Missing VAT IDs (review required)")
+        st.success("✔ No VAT compliance issues detected")
