@@ -1,7 +1,7 @@
 import re
 
 # ----------------------------
-# COMPANY DETECTION (B2B)
+# 1. B2B COMPANY DETECTION
 # ----------------------------
 
 B2B_KEYWORDS = [
@@ -25,7 +25,7 @@ def classify_customer_type(text: str):
 
 
 # ----------------------------
-# VAT EXTRACTION
+# 2. VAT EXTRACTION
 # ----------------------------
 
 VAT_PATTERN = {
@@ -50,7 +50,7 @@ def extract_vat(text: str):
 
 
 # ----------------------------
-# SECTION-BASED EXTRACTION FIX
+# 3. SECTION EXTRACTION (simple but stable)
 # ----------------------------
 
 def extract_section(text, keyword):
@@ -79,48 +79,79 @@ def extract_party_vat(text, role):
 
 
 # ----------------------------
-# MAIN ENGINE
+# 4. MAIN ENGINE
 # ----------------------------
 
 def analyze_invoice(text: str):
 
-    # Extract separately (IMPORTANT FIX)
+    # Extract supplier & customer separately
     supplier_vat, supplier_country = extract_party_vat(text, "SELLER")
     customer_vat, customer_country = extract_party_vat(text, "BUYER")
 
-    # fallback if structure missing
-    if not customer_vat:
-        customer_vat, customer_country = extract_vat(text)
-
+    # fallback if structure unclear
     if not supplier_vat:
         supplier_vat, supplier_country = extract_vat(text)
 
-    # classify customer
+    if not customer_vat:
+        customer_vat, customer_country = extract_vat(text)
+
+    # ----------------------------
+    # CUSTOMER TYPE
+    # ----------------------------
     customer_type = classify_customer_type(text)
 
     # ----------------------------
-    # RULE ENGINE
+    # DEFAULT VALUES
     # ----------------------------
-
-    compliance = "COMPLIANT"
     reverse_charge = False
     vat_status = "OK"
+    compliance = "COMPLIANT"
 
+    # ----------------------------
+    # EU LOGIC CORE
+    # ----------------------------
+
+    is_cross_border = (
+        supplier_country is not None and
+        customer_country is not None and
+        supplier_country != customer_country
+    )
+
+    # ----------------------------
+    # B2B RULES
+    # ----------------------------
     if customer_type == "B2B":
 
-        # Missing VAT is NOT B2C — it's NON-COMPLIANT
-        if not customer_vat:
-            vat_status = "MISSING CUSTOMER VAT"
-            compliance = "NOT COMPLIANT"
-
-        # EU cross-border rule
-        if supplier_country and customer_country and supplier_country != customer_country:
+        # Case 1: cross-border EU service
+        if is_cross_border:
             reverse_charge = True
+            vat_status = "REVERSE CHARGE APPLIES"
 
+            # VAT missing = critical error
+            if not customer_vat:
+                compliance = "NOT COMPLIANT"
+                vat_status = "MISSING CUSTOMER VAT"
+
+        # Case 2: same country B2B
+        else:
+            reverse_charge = False
+
+            if not customer_vat:
+                vat_status = "MISSING CUSTOMER VAT"
+                compliance = "NOT COMPLIANT"
+
+    # ----------------------------
+    # B2C RULES
+    # ----------------------------
     else:
         reverse_charge = False
-        vat_status = "B2C"
 
+        # If VAT wrongly applied in B2C, still basic check
+        vat_status = "B2C TRANSACTION"
+
+    # ----------------------------
+    # FINAL OUTPUT
+    # ----------------------------
     return {
         "customer_type": customer_type,
         "supplier_vat": supplier_vat,
