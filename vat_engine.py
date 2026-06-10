@@ -1,132 +1,68 @@
-import re
+import streamlit as st
+from vat_engine import analyze_invoice
+import fitz  # PyMuPDF
+from PIL import Image
+import io
+
+st.set_page_config(page_title="VAT Checker", layout="centered")
+
+st.title("VAT Decision Result")
 
 # =========================
-# COUNTRY MAP
+# PDF TEXT EXTRACTION
 # =========================
-
-COUNTRY_MAP = {
-    "GERMANY": "DE",
-    "FRANCE": "FR",
-    "ITALY": "IT",
-    "SPAIN": "ES",
-    "POLAND": "PL",
-    "NORWAY": "NO",
-    "COLOMBIA": "CO",
-    "SWEDEN": "SE",
-    "FINLAND": "FI",
-    "BELGIUM": "BE",
-    "AUSTRIA": "AT",
-    "NETHERLANDS": "NL",
-}
-
-# EU set (for future logic expansion)
-EU = {"DE","FR","IT","ES","PL","SE","FI","BE","AT","NL"}
-
-# =========================
-# HELPERS
-# =========================
-
-def up(text):
-    return text.upper() if text else ""
-
-
-def extract_party(text, keys):
-    text = up(text)
-    for k in keys:
-        if k in text:
-            return text.split(k, 1)[1]
+def extract_text_from_pdf(file):
+    doc = fitz.open(stream=file.read(), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
     return text
 
 
-def extract_vat(text):
-    text = up(text)
-    m = re.search(r"\b([A-Z]{2}[0-9A-Z]{6,15})\b", text)
-    if m:
-        vat = m.group(1)
-        return vat, vat[:2]
-    return None, None
+# =========================
+# IMAGE TEXT EXTRACTION (basic fallback)
+# =========================
+def extract_text_from_image(file):
+    img = Image.open(file)
+    return str(img.info)  # placeholder (OCR can be added later)
 
-
-def extract_country(text, vat_country=None):
-    if vat_country:
-        return vat_country
-
-    text = up(text)
-    for name, code in COUNTRY_MAP.items():
-        if name in text:
-            return code
-    return None
-
-
-def extract_vat_rate(text):
-    m = re.search(r"(\d{1,2}(\.\d+)?)\s*%", up(text))
-    return float(m.group(1)) if m else None
-
-
-def is_b2b(text, vat):
-    text = up(text)
-    keywords = ["GMBH","SARL","SAS","SA","LTD","LIMITED","SRL","SP Z OO","BV","NV"]
-    return bool(vat) or any(k in text for k in keywords)
 
 # =========================
-# MAIN ENGINE
+# UPLOAD
 # =========================
+uploaded_file = st.file_uploader(
+    "📄 Upload Invoice (PDF or Image)",
+    type=["pdf", "png", "jpg", "jpeg"]
+)
 
-def analyze_invoice(text):
-    text = up(text)
+def g(r, k):
+    return r.get(k, "UNKNOWN")
 
-    # -------------------------
-    # SELLER / BUYER SPLIT
-    # -------------------------
-    seller = extract_party(text, ["SELLER","SUPPLIER","SPRZEDAWCA"])
-    buyer = extract_party(text, ["BUYER","CUSTOMER","NABYWCA"])
 
-    # -------------------------
-    # OCR LAYER
-    # -------------------------
-    sup_vat, sup_ct = extract_vat(seller)
-    cus_vat, cus_ct = extract_vat(buyer)
+if uploaded_file:
 
-    supplier_country = extract_country(seller, sup_ct)
-    customer_country = extract_country(buyer, cus_ct)
+    file_type = uploaded_file.type
+    text = ""
 
-    vat_rate = extract_vat_rate(text)
+    # PDF
+    if "pdf" in file_type:
+        text = extract_text_from_pdf(uploaded_file)
 
-    supplier_vat = sup_vat or "NONE"
-    customer_vat = cus_vat or "NONE"
-
-    vat_status = f"VAT CHARGED ({vat_rate}%)" if vat_rate else "NO VAT DETECTED"
-
-    # -------------------------
-    # LOGIC LAYER
-    # -------------------------
-    customer_type = "B2B" if is_b2b(buyer, customer_vat) else "B2C"
-
-    cross_border = (
-        supplier_country is not None and
-        customer_country is not None and
-        supplier_country != customer_country
-    )
-
-    reverse_charge = customer_type == "B2B" and cross_border
-
-    # compliance rule
-    if reverse_charge and vat_rate:
-        compliance = "NOT COMPLIANT (VAT wrongly charged)"
+    # IMAGE
     else:
-        compliance = "COMPLIANT"
+        text = extract_text_from_image(uploaded_file)
 
-    # -------------------------
-    # OUTPUT
-    # -------------------------
-    return {
-        "supplier_country": supplier_country,
-        "customer_country": customer_country,
-        "supplier_vat": supplier_vat,
-        "customer_vat": customer_vat,
-        "vat_rate": vat_rate,
-        "vat_status": vat_status,
-        "customer_type": customer_type,
-        "reverse_charge": reverse_charge,
-        "compliance": compliance
-    }
+    if st.button("Analyze Invoice"):
+
+        result = analyze_invoice(text)
+
+        st.subheader("VAT Decision Result")
+
+        st.write(f"👤 Customer Type: {g(result,'customer_type')}")
+        st.write(f"🌍 Supplier Country: {g(result,'supplier_country')}")
+        st.write(f"🌍 Customer Country: {g(result,'customer_country')}")
+        st.write(f"🧾 Supplier VAT: {g(result,'supplier_vat')}")
+        st.write(f"🧾 Customer VAT: {g(result,'customer_vat')}")
+        st.write(f"🔁 Reverse Charge: {g(result,'reverse_charge')}")
+        st.write(f"💰 VAT Status: {g(result,'vat_status')}")
+        st.write(f"📊 Compliance: {g(result,'compliance')}")
