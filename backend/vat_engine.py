@@ -1,48 +1,31 @@
 import re
 
 # ----------------------------
-# 1. B2B COMPANY DETECTION
+# COMPANY DETECTION (B2B)
 # ----------------------------
 
 B2B_KEYWORDS = [
-    # Germany / Austria / Switzerland
     "GMBH", "AG", "UG", "KG", "OHG",
-
-    # France
     "SARL", "SAS", "SA", "EURL",
-
-    # Italy
     "SRL", "SPA", "SAPA",
-
-    # Spain
-    "SL", "SA",
-
-    # Netherlands / Belgium
-    "BV", "NV", "CVBA", "SNC",
-
-    # Poland
-    "SP. Z O.O", "S.A", "SP.K",
-
-    # UK / international
-    "LTD", "LIMITED", "PLC", "LLC"
+    "SL", "BV", "NV",
+    "SP. Z O.O", "S.A",
+    "LTD", "LIMITED", "LLC", "PLC"
 ]
 
 
-def classify_customer_type(name: str, address: str = ""):
-    """
-    Detect if customer is B2B or B2C based on entity name + address.
-    """
-    text = f"{name} {address}".upper()
+def classify_customer_type(text: str):
+    text = text.upper()
 
-    for keyword in B2B_KEYWORDS:
-        if keyword in text:
+    for k in B2B_KEYWORDS:
+        if k in text:
             return "B2B"
 
     return "B2C"
 
 
 # ----------------------------
-# 2. VAT EXTRACTION HELPERS
+# VAT EXTRACTION
 # ----------------------------
 
 VAT_PATTERN = {
@@ -56,80 +39,87 @@ VAT_PATTERN = {
 
 
 def extract_vat(text: str):
-    """
-    Extract VAT number if present.
-    """
+    text = text.upper()
+
     for country, pattern in VAT_PATTERN.items():
-        match = re.search(pattern, text.upper())
+        match = re.search(pattern, text)
         if match:
             return match.group(), country
+
     return None, None
 
 
 # ----------------------------
-# 3. MAIN VAT ANALYSIS ENGINE
+# SECTION-BASED EXTRACTION FIX
 # ----------------------------
 
-def analyze_invoice(invoice_text: str):
-    """
-    Main EU VAT compliance engine
-    """
+def extract_section(text, keyword):
+    lines = text.split("\n")
+    capture = False
+    buffer = []
 
-    # Extract VAT numbers
-    supplier_vat, supplier_country = extract_vat(invoice_text)
+    for line in lines:
+        if keyword.upper() in line.upper():
+            capture = True
+            continue
 
-    # naive extraction for customer VAT (can improve later)
-    customer_vat, customer_country = extract_vat(invoice_text)
+        if capture and any(x in line.upper() for x in ["SELLER", "BUYER", "SUPPLIER", "CUSTOMER"]):
+            if keyword.upper() not in line.upper():
+                break
 
-    # Extract names (very simplified - you already improve via parser later)
-    lines = invoice_text.split("\n")
-    seller_name = ""
-    buyer_name = ""
+        if capture:
+            buffer.append(line)
 
-    for i, line in enumerate(lines):
-        if "SELLER" in line.upper() or "VERKÄUFER" in line.upper():
-            seller_name = lines[i + 1] if i + 1 < len(lines) else ""
-        if "BUYER" in line.upper() or "NABYWCA" in line.upper():
-            buyer_name = lines[i + 1] if i + 1 < len(lines) else ""
+    return "\n".join(buffer)
+
+
+def extract_party_vat(text, role):
+    section = extract_section(text, role)
+    return extract_vat(section)
+
+
+# ----------------------------
+# MAIN ENGINE
+# ----------------------------
+
+def analyze_invoice(text: str):
+
+    # Extract separately (IMPORTANT FIX)
+    supplier_vat, supplier_country = extract_party_vat(text, "SELLER")
+    customer_vat, customer_country = extract_party_vat(text, "BUYER")
+
+    # fallback if structure missing
+    if not customer_vat:
+        customer_vat, customer_country = extract_vat(text)
+
+    if not supplier_vat:
+        supplier_vat, supplier_country = extract_vat(text)
+
+    # classify customer
+    customer_type = classify_customer_type(text)
 
     # ----------------------------
-    # 4. CLASSIFY CUSTOMER
-    # ----------------------------
-    customer_type = classify_customer_type(buyer_name)
-
-    # ----------------------------
-    # 5. EU RULE LOGIC
+    # RULE ENGINE
     # ----------------------------
 
     compliance = "COMPLIANT"
     reverse_charge = False
-    vat_status = "UNKNOWN"
+    vat_status = "OK"
 
-    # If B2B EU transaction
     if customer_type == "B2B":
 
-        # Missing VAT = problem
+        # Missing VAT is NOT B2C — it's NON-COMPLIANT
         if not customer_vat:
-            vat_status = "MISSING"
+            vat_status = "MISSING CUSTOMER VAT"
             compliance = "NOT COMPLIANT"
 
-        else:
-            vat_status = "VALID FORMAT (NOT VERIFIED)"
-
-        # Cross-border EU logic
+        # EU cross-border rule
         if supplier_country and customer_country and supplier_country != customer_country:
             reverse_charge = True
 
     else:
-        # B2C case
         reverse_charge = False
-
-        # If VAT charged in B2C → likely OK (simplified rule)
-        vat_status = "B2C CASE"
-
-    # ----------------------------
-    # 6. OUTPUT
-    # ----------------------------
+        vat_status = "B2C"
 
     return {
         "customer_type": customer_type,
