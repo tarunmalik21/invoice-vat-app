@@ -1,11 +1,11 @@
 import re
 
-# ---------------- CLEAN TEXT ---------------- #
+# ---------------- CLEAN ---------------- #
 
 def clean(text):
     return text.upper() if text else ""
 
-# ---------------- VAT EXTRACTION ---------------- #
+# ---------------- VAT DETECTION ---------------- #
 
 def extract_vat(text):
     text = clean(text)
@@ -18,10 +18,8 @@ def extract_vat(text):
 # ---------------- COUNTRY DETECTION ---------------- #
 
 def extract_country(text):
-
     text = clean(text)
 
-    # Seller / Supplier OCR mapping
     if "NORWAY" in text:
         return "NO"
     if "POLAND" in text:
@@ -35,7 +33,7 @@ def extract_country(text):
 
     return None
 
-# ---------------- VAT RATE OCR ---------------- #
+# ---------------- VAT RATE (OCR ONLY) ---------------- #
 
 def extract_vat_rate(text):
     text = clean(text)
@@ -55,7 +53,6 @@ def analyze_invoice(text):
 
     text = clean(text)
 
-    # Extract data
     supplier_country = extract_country(text)
     customer_country = extract_country(text)
 
@@ -64,15 +61,16 @@ def analyze_invoice(text):
 
     vat_rate = extract_vat_rate(text)
 
-    # Logic
     customer_type = "B2B" if is_b2b(text) else "B2C"
 
+    # Reverse charge logic
     reverse_charge = (
         supplier_country is not None and
         customer_country is not None and
         supplier_country != customer_country
     )
 
+    # VAT status ALWAYS from OCR
     vat_status = f"VAT CHARGED ({vat_rate}%)" if vat_rate else "NO VAT DETECTED"
 
     # Compliance logic
