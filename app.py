@@ -1,65 +1,27 @@
 import streamlit as st
-from pypdf import PdfReader
+from vat_engine import analyze_invoice
 
-import backend.vat_engine as vat_engine
+st.set_page_config(page_title="VAT Checker", layout="centered")
 
+st.title("VAT Decision Result")
 
-# -----------------------------
-# UI CONFIG
-# -----------------------------
-st.set_page_config(page_title="EU VAT Invoice Checker")
+text = st.text_area("Paste Invoice OCR Text")
 
-st.title("EU VAT Invoice Checker")
+def g(r, k):
+    return r.get(k, "UNKNOWN")
 
+if st.button("Analyze"):
 
-# -----------------------------
-# FILE UPLOAD
-# -----------------------------
-uploaded_file = st.file_uploader("Upload Invoice (PDF or TXT)", type=["pdf", "txt"])
-
-
-def extract_text(file):
-    text = ""
-
-    if file.name.endswith(".txt"):
-        text = file.read().decode("utf-8")
-
-    elif file.name.endswith(".pdf"):
-        reader = PdfReader(file)
-        for page in reader.pages:
-            text += page.extract_text() or ""
-
-    return text
-
-
-# -----------------------------
-# MAIN FLOW
-# -----------------------------
-if uploaded_file:
-
-    text = extract_text(uploaded_file)
-
-    if not text.strip():
-        st.error("❌ Could not extract text from file")
-        st.stop()
-
-    result = vat_engine.analyze_invoice(text)
-
-    st.subheader("VAT Decision Result")
-
-    st.write(f"👤 Customer Type: {result['customer_type']}")
-    st.write(f"🌍 Supplier Country: {result['supplier_country']}")
-    st.write(f"🌍 Customer Country: {result['customer_country']}")
-    st.write(f"🧾 Supplier VAT: {result['supplier_vat']}")
-    st.write(f"🧾 Customer VAT: {result['customer_vat']}")
-    st.write(f"🔁 Reverse Charge: {'YES' if result['reverse_charge'] else 'NO'}")
-    st.write(f"💰 VAT Status: {result['vat_status']}")
-    st.write(f"📊 Compliance: {result['compliance']}")
-
-    # -----------------------------
-    # FINAL STATUS BOX
-    # -----------------------------
-    if result["compliance"] == "COMPLIANT":
-        st.success("✅ Invoice is compliant")
+    if not text:
+        st.warning("Please paste invoice text")
     else:
-        st.error("❌ Invoice is NOT compliant")
+        result = analyze_invoice(text)
+
+        st.write(f"👤 Customer Type: {g(result,'customer_type')}")
+        st.write(f"🌍 Supplier Country: {g(result,'supplier_country')}")
+        st.write(f"🌍 Customer Country: {g(result,'customer_country')}")
+        st.write(f"🧾 Supplier VAT: {g(result,'supplier_vat')}")
+        st.write(f"🧾 Customer VAT: {g(result,'customer_vat')}")
+        st.write(f"🔁 Reverse Charge: {g(result,'reverse_charge')}")
+        st.write(f"💰 VAT Status: {g(result,'vat_status')}")
+        st.write(f"📊 Compliance: {g(result,'compliance')}")
