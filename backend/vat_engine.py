@@ -13,7 +13,19 @@ COUNTRY_MAP = {
     "NETHERLANDS": "NL",
     "BELGIUM": "BE",
     "AUSTRIA": "AT",
+    "NORWAY": "NO",
+    "SWITZERLAND": "CH",
+    "UNITED KINGDOM": "GB",
 }
+
+# =========================================================
+# NON-EU COUNTRIES
+# =========================================================
+
+NON_EU_COUNTRIES = {"NO", "CH", "GB", "US", "IN", "CN", "AE"}
+
+def is_non_eu(country):
+    return country in NON_EU_COUNTRIES
 
 # =========================================================
 # VAT PATTERNS
@@ -64,48 +76,27 @@ def detect_country(text, vat_country=None):
     return None
 
 
-# =========================================================
-# B2B DETECTION (IMPROVED EU COVERAGE)
-# =========================================================
-
 def is_b2b(text, vat_number=None):
     text = text.upper()
 
     keywords = [
-        # Germany / Austria
         "GMBH", "AG", "KG", "UG",
-
-        # France
         "SARL", "SAS", "SA", "SNC", "EURL",
-
-        # Italy
         "SRL", "S.R.L", "SPA", "S.P.A",
-
-        # Spain
-        "SL", "S.L", "SA",
-
-        # Netherlands / Belgium
+        "SL", "S.L",
         "BV", "NV", "VOF",
-
-        # Poland
         "SP Z OO", "SP. Z O.O",
-
-        # UK / generic
-        "LTD", "LIMITED", "PLC", "LLC",
-
-        # Nordic
+        "LTD", "LIMITED", "LLC",
         "AB", "OY", "AS"
     ]
 
     if any(k in text for k in keywords):
         return True
 
-    # VAT presence is strong B2B indicator
     if vat_number:
         return True
 
     return False
-
 
 # =========================================================
 # MAIN ENGINE
@@ -116,21 +107,21 @@ def analyze_invoice(text: str):
     text = text.upper()
 
     # -----------------------------
-    # SPLIT SELLER / BUYER
+    # SPLIT
     # -----------------------------
     seller_text = get_block(text, ["SELLER", "SUPPLIER", "SPRZEDAWCA"])
     buyer_text = get_block(text, ["BUYER", "CUSTOMER", "NABYWCA"])
 
     # -----------------------------
-    # VAT EXTRACTION
+    # VAT
     # -----------------------------
     supplier_vat, supplier_vat_country = extract_vat(seller_text)
     customer_vat, customer_vat_country = extract_vat(buyer_text)
 
-    vat_present = supplier_vat is not None
+    supplier_vat_missing = supplier_vat is None
 
     # -----------------------------
-    # COUNTRY DETECTION
+    # COUNTRY
     # -----------------------------
     supplier_country = detect_country(seller_text, supplier_vat_country)
     customer_country = detect_country(buyer_text, customer_vat_country)
@@ -141,7 +132,7 @@ def analyze_invoice(text: str):
     customer_type = "B2B" if is_b2b(buyer_text, customer_vat) else "B2C"
 
     # -----------------------------
-    # CROSS BORDER CHECK
+    # CROSS BORDER
     # -----------------------------
     cross_border = (
         supplier_country is not None and
@@ -150,39 +141,53 @@ def analyze_invoice(text: str):
     )
 
     # =====================================================
-    # COMPLIANCE ENGINE (FIXED LOGIC)
+    # VAT RULE ENGINE
     # =====================================================
 
     # -----------------------------
-    # CASE 1: DOMESTIC B2B
+    # CASE 1: NON-EU SUPPLIER
     # -----------------------------
-    if customer_type == "B2B" and supplier_country == customer_country:
+    if supplier_country and is_non_eu(supplier_country):
 
         reverse_charge = False
 
-        if vat_present:
-            vat_status = "VAT CHARGED (DOMESTIC B2B)"
-            compliance = "COMPLIANT"
-        else:
-            vat_status = "MISSING VAT (DOMESTIC B2B ERROR)"
+        if supplier_vat_missing:
+            vat_status = "MISSING SUPPLIER VAT (NON-EU HIGH RISK)"
             compliance = "NOT COMPLIANT"
+        else:
+            vat_status = "NON-EU SUPPLIER (MANUAL REVIEW REQUIRED)"
+            compliance = "REQUIRES REVIEW"
 
     # -----------------------------
-    # CASE 2: CROSS-BORDER B2B
+    # CASE 2: EU CROSS-BORDER B2B
     # -----------------------------
     elif customer_type == "B2B" and cross_border:
 
         reverse_charge = True
 
-        if vat_present:
-            vat_status = "REVERSE CHARGE (0% VAT)"
-            compliance = "COMPLIANT"
-        else:
+        if supplier_vat_missing:
             vat_status = "MISSING SUPPLIER VAT (CROSS-BORDER ERROR)"
             compliance = "NOT COMPLIANT"
+        else:
+            vat_status = "REVERSE CHARGE (0% VAT)"
+            compliance = "COMPLIANT"
 
     # -----------------------------
-    # CASE 3: B2C
+    # CASE 3: DOMESTIC B2B
+    # -----------------------------
+    elif customer_type == "B2B" and supplier_country == customer_country:
+
+        reverse_charge = False
+
+        if supplier_vat_missing:
+            vat_status = "MISSING VAT (DOMESTIC B2B ERROR)"
+            compliance = "NOT COMPLIANT"
+        else:
+            vat_status = "VAT CHARGED (DOMESTIC B2B)"
+            compliance = "COMPLIANT"
+
+    # -----------------------------
+    # CASE 4: B2C
     # -----------------------------
     else:
 
@@ -191,17 +196,14 @@ def analyze_invoice(text: str):
         compliance = "COMPLIANT"
 
     # -----------------------------
-    # FINAL OUTPUT
+    # OUTPUT
     # -----------------------------
     return {
         "customer_type": customer_type,
-
         "supplier_country": supplier_country,
         "customer_country": customer_country,
-
         "supplier_vat": supplier_vat,
         "customer_vat": customer_vat,
-
         "reverse_charge": reverse_charge,
         "vat_status": vat_status,
         "compliance": compliance
