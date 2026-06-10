@@ -1,11 +1,11 @@
 import re
 
-# ---------------- CLEAN ---------------- #
+# ---------------- CLEAN TEXT ---------------- #
 
 def clean(text):
     return text.upper() if text else ""
 
-# ---------------- VAT DETECTION ---------------- #
+# ---------------- VAT EXTRACTION ---------------- #
 
 def extract_vat(text):
     text = clean(text)
@@ -15,25 +15,42 @@ def extract_vat(text):
         return vat, vat[:2]
     return None, None
 
-# ---------------- COUNTRY DETECTION ---------------- #
+# ---------------- SELLER / BUYER EXTRACTION ---------------- #
 
-def extract_country(text):
+def extract_parties(text):
+
     text = clean(text)
 
-    if "NORWAY" in text:
-        return "NO"
-    if "POLAND" in text:
+    # SELLER
+    seller_block = ""
+    buyer_block = ""
+
+    if "SELLER" in text or "SUPPLIER" in text:
+        seller_block = text.split("SELLER")[-1].split("BUYER")[0]
+
+    if "BUYER" in text:
+        buyer_block = text.split("BUYER")[-1]
+
+    return seller_block, buyer_block
+
+# ---------------- COUNTRY DETECTION ---------------- #
+
+def detect_country(text):
+
+    text = clean(text)
+
+    if "POLAND" in text or "PL" in text:
         return "PL"
-    if "FRANCE" in text:
+    if "FRANCE" in text or "FR" in text:
         return "FR"
-    if "ITALY" in text:
+    if "ITALY" in text or "IT" in text:
         return "IT"
-    if "SPAIN" in text:
-        return "ES"
+    if "NORWAY" in text or "NO" in text:
+        return "NO"
 
     return None
 
-# ---------------- VAT RATE (OCR ONLY) ---------------- #
+# ---------------- VAT RATE OCR ---------------- #
 
 def extract_vat_rate(text):
     text = clean(text)
@@ -53,39 +70,49 @@ def analyze_invoice(text):
 
     text = clean(text)
 
-    supplier_country = extract_country(text)
-    customer_country = extract_country(text)
+    seller_block, buyer_block = extract_parties(text)
 
-    supplier_vat, _ = extract_vat(text)
-    customer_vat, _ = extract_vat(text)
+    # fallback if OCR not structured
+    seller_block = seller_block or text
+    buyer_block = buyer_block or text
+
+    supplier_country = detect_country(seller_block)
+    customer_country = detect_country(buyer_block)
+
+    supplier_vat, _ = extract_vat(seller_block)
+    customer_vat, _ = extract_vat(buyer_block)
 
     vat_rate = extract_vat_rate(text)
 
     customer_type = "B2B" if is_b2b(text) else "B2C"
 
-    # Reverse charge logic
+    # ---------------- REVERSE CHARGE LOGIC ---------------- #
     reverse_charge = (
         supplier_country is not None and
         customer_country is not None and
         supplier_country != customer_country
     )
 
-    # VAT status ALWAYS from OCR
-    vat_status = f"VAT CHARGED ({vat_rate}%)" if vat_rate else "NO VAT DETECTED"
+    # ---------------- VAT STATUS (ONLY OCR) ---------------- #
+    vat_status = f"VAT CHARGED ({vat_rate}%)" if vat_rate else "VAT NOT FOUND"
 
-    # Compliance logic
+    # ---------------- COMPLIANCE ---------------- #
     if reverse_charge and vat_rate:
-        compliance = "NOT COMPLIANT (Reverse charge ignored)"
+        compliance = "NOT COMPLIANT (Reverse charge applicable but VAT charged)"
     else:
         compliance = "COMPLIANT"
 
     return {
         "customer_type": customer_type,
+
         "supplier_country": supplier_country,
         "customer_country": customer_country,
+
         "supplier_vat": supplier_vat or "NONE",
         "customer_vat": customer_vat or "NONE",
+
         "reverse_charge": "YES" if reverse_charge else "NO",
+
         "vat_status": vat_status,
         "compliance": compliance
     }
