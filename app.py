@@ -74,6 +74,31 @@ Invoice:
 
 
 # =========================
+# COUNTRY NORMALIZER (CRITICAL FIX)
+# =========================
+def normalize_country(c):
+    if not c:
+        return ""
+
+    c = c.strip().lower()
+
+    mapping = {
+        "germany": "germany", "de": "germany",
+        "france": "france", "fr": "france",
+        "italy": "italy", "it": "italy",
+        "spain": "spain", "es": "spain",
+        "netherlands": "netherlands", "nl": "netherlands",
+        "belgium": "belgium", "be": "belgium",
+        "austria": "austria", "at": "austria",
+        "poland": "poland", "pl": "poland",
+        "portugal": "portugal", "pt": "portugal",
+        "czech republic": "czech republic", "cz": "czech republic"
+    }
+
+    return mapping.get(c, c)
+
+
+# =========================
 # CUSTOMER CLASSIFIER
 # =========================
 def classify_customer(inv):
@@ -92,7 +117,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU LIST
+# EU COUNTRIES
 # =========================
 EU_COUNTRIES = {
     "germany", "france", "italy", "spain", "netherlands",
@@ -101,11 +126,12 @@ EU_COUNTRIES = {
 
 
 # =========================
-# REGION CLASSIFICATION (FIXED)
+# REGION LOGIC (FIXED)
 # =========================
 def get_region(supplier, customer):
-    supplier = (supplier or "").lower()
-    customer = (customer or "").lower()
+
+    supplier = normalize_country(supplier)
+    customer = normalize_country(customer)
 
     if supplier == customer:
         return "Domestic"
@@ -117,18 +143,19 @@ def get_region(supplier, customer):
 
 
 # =========================
-# FIXED REVERSE CHARGE LOGIC (IMPORTANT)
+# REVERSE CHARGE (FIXED + SAFE)
 # =========================
 def is_reverse_charge(inv, customer_type):
-    supplier = (inv.get("supplier_country") or "").lower()
-    customer = (inv.get("customer_country") or "").lower()
+
+    supplier = normalize_country(inv.get("supplier_country"))
+    customer = normalize_country(inv.get("customer_country"))
     vat_id = (inv.get("customer_vat_id") or "").strip()
 
-    # ❌ NEVER reverse charge for domestic invoices
+    # ❌ NEVER for domestic
     if supplier == customer:
         return False
 
-    # ✔ Only EU cross-border B2B with VAT ID
+    # ✔ EU cross-border B2B only
     if (
         supplier in EU_COUNTRIES and
         customer in EU_COUNTRIES and
@@ -141,7 +168,7 @@ def is_reverse_charge(inv, customer_type):
 
 
 # =========================
-# VAT rules (Germany default model)
+# VAT rules
 # =========================
 def get_vat_rate(category="standard"):
     category = (category or "").lower()
@@ -196,7 +223,7 @@ def run_engine(inv):
 # =========================
 st.set_page_config(page_title="VAT Checker", layout="centered")
 
-st.title("📄 EU VAT Invoice Checker (Fixed Logic)")
+st.title("📄 EU VAT Invoice Checker (Fixed + Production Ready)")
 
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
