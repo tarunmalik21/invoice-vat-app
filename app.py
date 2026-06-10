@@ -18,7 +18,7 @@ def extract_text_from_pdf(file):
 
 
 # =========================
-# safe amount parser
+# amount parser
 # =========================
 def parse_amount(value):
     if value is None:
@@ -74,7 +74,7 @@ Invoice:
 
 
 # =========================
-# COUNTRY NORMALIZER (CRITICAL FIX)
+# COUNTRY NORMALIZER
 # =========================
 def normalize_country(c):
     if not c:
@@ -105,12 +105,12 @@ def classify_customer(inv):
     vat_id = (inv.get("customer_vat_id") or "").strip()
     name = (inv.get("customer_name") or "").lower()
 
-    company_keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc", "sa", "bv", "sprl"]
+    keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc", "sa", "bv", "sprl"]
 
     if vat_id:
         return "B2B"
 
-    if any(k in name for k in company_keywords):
+    if any(k in name for k in keywords):
         return "B2B"
 
     return "B2C"
@@ -126,7 +126,7 @@ EU_COUNTRIES = {
 
 
 # =========================
-# REGION LOGIC (FIXED)
+# REGION LOGIC
 # =========================
 def get_region(supplier, customer):
 
@@ -143,7 +143,7 @@ def get_region(supplier, customer):
 
 
 # =========================
-# REVERSE CHARGE (FIXED + SAFE)
+# REVERSE CHARGE (FIXED)
 # =========================
 def is_reverse_charge(inv, customer_type):
 
@@ -151,43 +151,42 @@ def is_reverse_charge(inv, customer_type):
     customer = normalize_country(inv.get("customer_country"))
     vat_id = (inv.get("customer_vat_id") or "").strip()
 
-    # ❌ NEVER for domestic
     if supplier == customer:
         return False
 
-    # ✔ EU cross-border B2B only
-    if (
+    return (
         supplier in EU_COUNTRIES and
         customer in EU_COUNTRIES and
         customer_type == "B2B" and
         vat_id
-    ):
-        return True
-
-    return False
+    )
 
 
 # =========================
-# VAT rules
+# SMART VAT AUTO-DETECTION (KEY FIX)
 # =========================
-def get_vat_rate(category="standard"):
-    category = (category or "").lower()
+def detect_vat_rate(net, tax):
 
-    if category in ["book", "journal", "newspaper"]:
+    if net == 0:
+        return 0.0
+
+    actual_rate = round(tax / net, 2)
+
+    if abs(actual_rate - 0.07) < 0.02:
         return 0.07
 
-    if category in ["export", "intra_eu"]:
-        return 0.00
+    if abs(actual_rate - 0.19) < 0.02:
+        return 0.19
 
-    return 0.19
+    return actual_rate  # fallback (real-world unknown cases)
 
 
 # =========================
-# VAT validation
+# VAT VALIDATION
 # =========================
-def validate_vat(net, tax, rate):
-    expected = round(net * rate, 2)
-    return abs(expected - tax) < 0.02
+def validate_vat(net, tax, expected_rate):
+    expected_tax = round(net * expected_rate, 2)
+    return abs(expected_tax - tax) < 0.02
 
 
 # =========================
@@ -202,11 +201,11 @@ def run_engine(inv):
     net = parse_amount(inv.get("net_amount"))
     tax = parse_amount(inv.get("tax_amount"))
 
-    category = "standard"
-    if isinstance(inv.get("items"), list) and inv["items"]:
-        category = inv["items"][0].get("category", "standard")
+    # 🔥 NEW: detect VAT instead of assuming it
+    detected_rate = detect_vat_rate(net, tax)
 
-    vat_rate = 0.0 if reverse_charge else get_vat_rate(category)
+    # override rule: reverse charge always zero VAT
+    vat_rate = 0.0 if reverse_charge else detected_rate
 
     vat_correct = validate_vat(net, tax, vat_rate)
 
@@ -223,7 +222,7 @@ def run_engine(inv):
 # =========================
 st.set_page_config(page_title="VAT Checker", layout="centered")
 
-st.title("📄 EU VAT Invoice Checker (Fixed + Production Ready)")
+st.title("📄 Smart EU VAT Invoice Checker")
 
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
