@@ -17,6 +17,39 @@ st.write("🚀 App running...")
 
 
 # =========================
+# COUNTRY + SUFFIX MAP
+# =========================
+COUNTRY_SUFFIX_MAP = {
+    "de": ["gmbh", "ag", "kg", "ug", "ohg", "gbr"],
+    "fr": ["sarl", "sas", "sa", "eurl", "sasu"],
+    "it": ["srl", "spa", "snc", "sas"],
+    "es": ["sl", "s.l", "sa", "s.a", "slne"],
+    "nl": ["bv", "nv"],
+    "be": ["bv", "nv", "sprl", "scrl"],
+    "at": ["gmbh", "ag", "og", "kg"],
+    "pl": ["sp. z o.o", "s.a", "spolka z oo"],
+    "pt": ["lda", "sa"],
+    "cz": ["sro", "a.s", "as"],
+    "uk": ["ltd", "limited", "plc", "llp"],
+    "us": ["inc", "llc", "corp", "corporation"]
+}
+
+
+def detect_country_by_suffix(name):
+    if not name:
+        return None
+
+    name = name.lower()
+
+    for country, suffixes in COUNTRY_SUFFIX_MAP.items():
+        for s in suffixes:
+            if s in name:
+                return country
+
+    return None
+
+
+# =========================
 # PDF EXTRACTION
 # =========================
 def extract_text_from_pdf(file):
@@ -58,7 +91,9 @@ customer_name, customer_country, customer_vat_id,
 invoice_number, invoice_date, currency,
 net_amount, tax_amount, gross_amount
 
-Return empty string if unknown.
+IMPORTANT:
+- Map VAT / NIF / Tax ID correctly
+- Extract country even if written as abbreviation or missing
 
 TEXT:
 {text}
@@ -77,7 +112,7 @@ TEXT:
 
 
 # =========================
-# COUNTRY NORMALIZER
+# NORMALIZE COUNTRY
 # =========================
 def normalize_country(c):
     if not c:
@@ -120,18 +155,18 @@ def classify_customer(inv):
 
 
 # =========================
-# EU SET
+# REGION LOGIC
 # =========================
 EU = {"de", "fr", "it", "es", "be", "nl", "at", "pl", "pt", "cz"}
 
 
-# =========================
-# REGION LOGIC
-# =========================
 def get_region(supplier, customer):
 
     s = normalize_country(supplier)
     c = normalize_country(customer)
+
+    if not s or not c:
+        return "UNKNOWN"
 
     if s == c:
         return "Domestic"
@@ -146,28 +181,28 @@ def get_region(supplier, customer):
 # VAT CHECK
 # =========================
 def is_vat_charged(inv):
-    tax = inv.get("tax_amount")
     try:
-        return float(tax) > 0
+        return float(inv.get("tax_amount", 0)) > 0
     except:
         return False
 
 
 # =========================
-# TAX INFO (ONLY NON-EU)
-# =========================
-def get_tax_info(region):
-
-    if region == "Non-EU":
-        return "0% VAT on invoice (export/import transaction). Customs VAT may apply separately"
-
-    return ""
-
-
-# =========================
-# ENGINE (FINAL RULES)
+# ENGINE
 # =========================
 def run_engine(inv):
+
+    # =========================
+    # 🔥 FIX: infer missing countries using suffix
+    # =========================
+    supplier_name = inv.get("supplier_name", "")
+    customer_name = inv.get("customer_name", "")
+
+    if not inv.get("supplier_country"):
+        inv["supplier_country"] = detect_country_by_suffix(supplier_name)
+
+    if not inv.get("customer_country"):
+        inv["customer_country"] = detect_country_by_suffix(customer_name)
 
     customer_type = classify_customer(inv)
     region = get_region(inv.get("supplier_country"), inv.get("customer_country"))
@@ -201,8 +236,7 @@ def run_engine(inv):
         "vat_present": vat_present,
         "vat_charged": vat_charged,
         "errors": errors,
-        "warnings": warnings,
-        "tax_info": get_tax_info(region)
+        "warnings": warnings
     }
 
 
@@ -241,10 +275,6 @@ if uploaded_file:
 
     st.write(f"👤 Customer Type: **{result['customer_type']}**")
     st.write(f"🌍 Region: **{result['region']}**")
-
-    if result["tax_info"]:
-        st.write(f"🧾 Tax Info: **{result['tax_info']}**")
-
     st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
     st.write(f"💰 VAT Present: **{'YES' if result['vat_present'] else 'NO'}**")
 
