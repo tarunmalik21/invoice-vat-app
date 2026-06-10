@@ -5,3 +5,5 @@ Pillow>=10.0.0
 rich
 setuptools>=68.0
 wheel
+pymupdf
+openai
