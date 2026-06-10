@@ -101,7 +101,7 @@ EU_COUNTRIES = {
 
 
 # =========================
-# REGION LOGIC (UPDATED)
+# REGION LOGIC
 # =========================
 def get_region(supplier, customer):
     supplier = (supplier or "").lower()
@@ -117,12 +117,17 @@ def get_region(supplier, customer):
 
 
 # =========================
-# Reverse charge logic
+# FIXED REVERSE CHARGE LOGIC
 # =========================
 def is_reverse_charge(inv, customer_type):
     supplier = (inv.get("supplier_country") or "").lower()
     customer = (inv.get("customer_country") or "").lower()
 
+    # ❌ NEVER reverse charge for domestic invoices
+    if supplier == customer:
+        return False
+
+    # ✔️ Only cross-border EU B2B with VAT ID
     return (
         supplier in EU_COUNTRIES and
         customer in EU_COUNTRIES and
