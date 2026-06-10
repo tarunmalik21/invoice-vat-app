@@ -9,3 +9,6 @@ pymupdf
 openai
 streamlit
 pypdf
+pymupdf
+pillow
+pytesseract
