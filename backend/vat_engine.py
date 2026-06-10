@@ -23,7 +23,7 @@ COUNTRY_MAP = {
 NON_EU = {"NO", "CH", "GB", "US", "IN", "CN", "AE"}
 
 # =========================================================
-# SECTION EXTRACTION (SELLER / BUYER CLEAN SPLIT)
+# SECTION SPLITTER (SELLER / BUYER SAFE)
 # =========================================================
 
 def extract_section(text, start_keywords, end_keywords):
@@ -85,7 +85,7 @@ def extract_vat(text):
     return None, None
 
 # =========================================================
-# COUNTRY DETECTION
+# COUNTRY NORMALIZATION
 # =========================================================
 
 def normalize_country(text, vat_country=None):
@@ -101,7 +101,7 @@ def normalize_country(text, vat_country=None):
     return None
 
 # =========================================================
-# VAT RATE DETECTION
+# VAT RATE EXTRACTION (OCR PRIORITY)
 # =========================================================
 
 def extract_vat_rate(text):
@@ -168,7 +168,7 @@ def analyze_invoice(text: str):
     customer_country = normalize_country(buyer_text, customer_vat_country)
 
     # =====================================================
-    # VAT RATE
+    # VAT RATE (OCR PRIORITY FIELD)
     # =====================================================
 
     vat_rate = extract_vat_rate(text)
@@ -184,24 +184,31 @@ def analyze_invoice(text: str):
     # =====================================================
 
     cross_border = (
-        supplier_country is not None
+        customer_type == "B2B"
+        and supplier_country is not None
         and customer_country is not None
         and supplier_country != customer_country
     )
 
     # =====================================================
-    # RULE ENGINE (FIXED EU LOGIC)
+    # RULE ENGINE (FINAL PRIORITY LOGIC)
     # =====================================================
 
     reverse_charge = False
 
-    # CASE 1: CROSS BORDER B2B (EU)
-    if (
-        customer_type == "B2B"
-        and cross_border
-        and supplier_country not in NON_EU
-        and customer_country not in NON_EU
-    ):
+    # 🥇 PRIORITY 1: OCR VAT EXISTS (OVERRIDES EVERYTHING)
+    if vat_rate is not None:
+
+        reverse_charge = False
+        vat_status = f"VAT CHARGED ({vat_rate}%)"
+
+        if supplier_vat == "NONE":
+            compliance = "NOT COMPLIANT"
+        else:
+            compliance = "COMPLIANT"
+
+    # 🥈 PRIORITY 2: CROSS BORDER B2B (ONLY IF NO VAT FOUND)
+    elif cross_border:
 
         reverse_charge = True
 
@@ -212,7 +219,7 @@ def analyze_invoice(text: str):
             vat_status = "REVERSE CHARGE (0% VAT)"
             compliance = "COMPLIANT"
 
-    # CASE 2: DOMESTIC B2B
+    # 🥉 PRIORITY 3: DOMESTIC B2B
     elif customer_type == "B2B" and supplier_country == customer_country:
 
         reverse_charge = False
@@ -224,14 +231,14 @@ def analyze_invoice(text: str):
             vat_status = "VAT CHARGED (DOMESTIC B2B)"
             compliance = "COMPLIANT"
 
-    # CASE 3: NON-EU SUPPLIER
+    # NON-EU SUPPLIER
     elif supplier_country in NON_EU:
 
         reverse_charge = False
         vat_status = "NON-EU SUPPLIER"
         compliance = "REQUIRES REVIEW"
 
-    # CASE 4: B2C
+    # B2C DEFAULT
     else:
 
         reverse_charge = False
