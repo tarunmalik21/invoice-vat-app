@@ -3,50 +3,59 @@ import fitz
 import re
 import json
 from openai import OpenAI
+from pdf2image import convert_from_bytes
+import pytesseract
 
 client = OpenAI()
 
 # =========================
-# PDF extraction
+# APP TITLE
+# =========================
+st.set_page_config(page_title="EU VAT Invoice Checker", layout="centered")
+st.title("📄 EU VAT Invoice Checker")
+
+
+# =========================
+# DEBUG START
+# =========================
+st.write("🚀 App loaded successfully")
+
+
+# =========================
+# PDF TEXT EXTRACTION (AUTO OCR FALLBACK)
 # =========================
 def extract_text_from_pdf(file):
-    doc = fitz.open(stream=file.read(), filetype="pdf")
+    file_bytes = file.read()
+
+    # --- Try normal PDF text extraction ---
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
     text = ""
+
     for page in doc:
-        text += page.get_text()
-    return text
+        page_text = page.get_text("text")
+        if page_text:
+            text += page_text
+
+    text = text.strip()
+
+    # --- If empty → OCR fallback ---
+    if len(text) < 50:
+        st.warning("⚠️ No selectable text found → using OCR")
+
+        images = convert_from_bytes(file_bytes)
+        text = ""
+
+        for img in images:
+            text += pytesseract.image_to_string(img)
+
+    return text.strip()
 
 
 # =========================
-# amount parser (kept for future use)
-# =========================
-def parse_amount(value):
-    if value is None:
-        return 0.0
-
-    value = str(value).strip()
-    value = re.sub(r"[^\d,.\-]", "", value)
-
-    if "," in value and "." in value:
-        if value.rfind(",") > value.rfind("."):
-            value = value.replace(".", "")
-            value = value.replace(",", ".")
-        else:
-            value = value.replace(",", "")
-
-    elif "," in value:
-        value = value.replace(",", ".")
-
-    try:
-        return float(value)
-    except:
-        return 0.0
-
-
-# =========================
-# OpenAI extraction
+# OPENAI EXTRACTION
 # =========================
 def extract_invoice_data(text):
+
     prompt = f"""
 Extract invoice data and return ONLY valid JSON.
 
@@ -57,11 +66,12 @@ invoice_number, invoice_date, currency,
 net_amount, tax_amount, gross_amount,
 items
 
-IMPORTANT:
-- Fix OCR mistakes where possible (e.g. SPRZEDAWCA = VAT ID)
-- Do not hallucinate VAT numbers
+Rules:
+- Fix OCR mistakes (e.g. SPRZEDAWCA → VAT ID if possible)
+- If unknown, return empty string
+- Output ONLY JSON
 
-Invoice:
+TEXT:
 {text}
 """
 
@@ -74,7 +84,12 @@ Invoice:
     raw = response.choices[0].message.content
     raw = raw.replace("```json", "").replace("```", "").strip()
 
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        st.error("❌ JSON parsing failed")
+        st.text(raw)
+        raise e
 
 
 # =========================
@@ -147,14 +162,14 @@ def get_region(supplier, customer):
 
 
 # =========================
-# REVERSE CHARGE
+# REVERSE CHARGE RULE
 # =========================
 def is_reverse_charge(region):
     return region == "Non-Domestic-EU"
 
 
 # =========================
-# VAT VALIDATION (SIMPLIFIED)
+# VAT CHECK (SIMPLIFIED)
 # =========================
 def validate_vat_presence(supplier_vat, customer_vat):
     return bool(supplier_vat and customer_vat)
@@ -183,37 +198,47 @@ def run_engine(inv):
 
 
 # =========================
-# STREAMLIT UI
+# FILE UPLOAD
 # =========================
-st.set_page_config(page_title="EU VAT Invoice Checker", layout="centered")
-
-st.title("📄 EU VAT Invoice Checker")
-
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
+
 
 if uploaded_file:
 
-    st.info("Reading PDF...")
+    st.success("📥 File uploaded")
+
+    # STEP 1
     text = extract_text_from_pdf(uploaded_file)
 
-    st.success("Extracting invoice data...")
+    st.write("📄 Extracted text length:", len(text))
+    st.text(text[:800])
 
-    try:
-        inv = extract_invoice_data(text)
+    if len(text) < 10:
+        st.error("❌ No text extracted from PDF")
+        st.stop()
 
-        result = run_engine(inv)
+    # STEP 2
+    st.info("🔍 Extracting invoice data using AI...")
 
-        st.subheader("📊 VAT Decision Result")
+    inv = extract_invoice_data(text)
 
-        st.write(f"👤 Customer Type: **{result['customer_type']}**")
-        st.write(f"🌍 Region: **{result['region']}**")
-        st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
-        st.write(f"💰 VAT Correct: **{'YES' if result['vat_correct'] else 'NO'}**")
+    st.write("📦 Extracted JSON:")
+    st.json(inv)
 
-        if result["vat_correct"]:
-            st.success("✅ Invoice OK (VAT IDs present)")
-        else:
-            st.warning("⚠️ Missing VAT information")
+    # STEP 3
+    st.info("⚙️ Running VAT engine...")
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+    result = run_engine(inv)
+
+    # STEP 4
+    st.subheader("📊 Result")
+
+    st.write(f"👤 Customer Type: **{result['customer_type']}**")
+    st.write(f"🌍 Region: **{result['region']}**")
+    st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
+    st.write(f"💰 VAT Present (valid): **{'YES' if result['vat_correct'] else 'NO'}**")
+
+    if result["vat_correct"]:
+        st.success("✅ Invoice OK (VAT IDs present)")
+    else:
+        st.warning("⚠️ Missing VAT information")
