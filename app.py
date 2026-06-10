@@ -1,136 +1,297 @@
-import re
 import streamlit as st
+import fitz
+import json
+from openai import OpenAI
+from pdf2image import convert_from_bytes
+import pytesseract
+
+client = OpenAI()
 
 # =========================
-# VAT VALIDATION ENGINE (EU WIDE)
+# APP SETUP
 # =========================
+st.set_page_config(page_title="EU VAT Invoice Checker", layout="centered")
+st.title("📄 EU VAT Invoice Checker")
 
-VAT_PATTERNS = {
-    "de": r"^DE[0-9]{9}$",
-    "fr": r"^FR[A-Z0-9]{2}[0-9]{9}$",
-    "it": r"^IT[0-9]{11}$",
-    "es": r"^ES([A-Z][0-9]{7}[A-Z]|[0-9]{8}|[A-Z0-9][0-9]{7}[A-Z0-9])$",
-    "nl": r"^NL[0-9]{9}B[0-9]{2}$",
-    "at": r"^ATU[0-9]{8}$",
-    "be": r"^BE0[0-9]{9}$",
-    "pl": r"^PL[0-9]{10}$",
-    "pt": r"^PT[0-9]{9}$",
-    "cz": r"^CZ[0-9]{8,10}$",
-    "uk": r"^GB[0-9]{9}$",
-    "us": r"^[0-9]{2}-[0-9]{7}$"
+st.write("🚀 App running...")
+
+
+# =========================
+# COUNTRY + SUFFIX MAP
+# =========================
+COUNTRY_SUFFIX_MAP = {
+    "de": ["gmbh", "ag", "kg", "ug", "ohg", "gbr"],
+    "fr": ["sarl", "sas", "sa", "eurl", "sasu"],
+    "it": ["srl", "spa", "snc", "sas"],
+    "es": ["sl", "s.l", "sa", "s.a", "slne"],
+    "nl": ["bv", "nv"],
+    "be": ["bv", "nv", "sprl", "scrl"],
+    "at": ["gmbh", "ag", "og", "kg"],
+    "pl": ["sp. z o.o", "s.a", "spolka z oo"],
+    "pt": ["lda", "sa"],
+    "cz": ["sro", "a.s", "as"],
+    "uk": ["ltd", "limited", "plc", "llp"],
+    "us": ["inc", "llc", "corp", "corporation"]
 }
 
-# =========================
-# FUNCTIONS
-# =========================
 
-def normalize_vat(vat: str):
-    if not vat:
-        return ""
-    return vat.replace(" ", "").upper()
-
-
-def detect_vat_country(vat: str):
-    vat = normalize_vat(vat)
-    if len(vat) < 2:
+def detect_country_by_suffix(name):
+    if not name:
         return None
-    return vat[:2].lower()
+
+    name = name.lower()
+
+    for country, suffixes in COUNTRY_SUFFIX_MAP.items():
+        for s in suffixes:
+            if s in name:
+                return country
+
+    return None
 
 
-def is_valid_vat(vat: str):
-    vat = normalize_vat(vat)
-    country = detect_vat_country(vat)
+# =========================
+# PDF EXTRACTION
+# =========================
+def extract_text_from_pdf(file):
+    file_bytes = file.read()
 
-    if not country:
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    text = ""
+
+    for page in doc:
+        page_text = page.get_text("text")
+        if page_text:
+            text += page_text
+
+    text = text.strip()
+
+    # OCR fallback
+    if len(text) < 50:
+        st.warning("⚠️ Scanned PDF detected → using OCR")
+        images = convert_from_bytes(file_bytes)
+        text = ""
+
+        for img in images:
+            text += pytesseract.image_to_string(img)
+
+    return text.strip()
+
+
+# =========================
+# OPENAI EXTRACTION
+# =========================
+def extract_invoice_data(text):
+
+    prompt = f"""
+Extract invoice data and return ONLY valid JSON.
+
+Fields:
+supplier_name, supplier_country, supplier_vat_id,
+customer_name, customer_country, customer_vat_id,
+invoice_number, invoice_date, currency,
+net_amount, tax_amount, gross_amount
+
+IMPORTANT:
+- Map VAT / NIF / Tax ID correctly
+- Extract country even if written as abbreviation or missing
+
+TEXT:
+{text}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+
+    raw = response.choices[0].message.content
+    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    return json.loads(raw)
+
+
+# =========================
+# NORMALIZE COUNTRY
+# =========================
+def normalize_country(c):
+    if not c:
+        return ""
+
+    c = c.lower().strip()
+
+    mapping = {
+        "germany": "de", "de": "de",
+        "france": "fr", "fr": "fr",
+        "italy": "it", "it": "it",
+        "spain": "es", "es": "es",
+        "belgium": "be", "be": "be",
+        "netherlands": "nl", "nl": "nl",
+        "austria": "at", "at": "at",
+        "poland": "pl", "pl": "pl",
+        "portugal": "pt", "pt": "pt",
+        "czech republic": "cz", "cz": "cz"
+    }
+
+    return mapping.get(c, c)
+
+
+# =========================
+# CLASSIFIER
+# =========================
+def classify_customer(inv):
+    vat_id = (inv.get("customer_vat_id") or "").strip()
+    name = (inv.get("customer_name") or "").lower()
+
+    keywords = ["gmbh", "ltd", "kg", "ag", "inc", "llc", "sa", "bv"]
+
+    if vat_id:
+        return "B2B"
+
+    if any(k in name for k in keywords):
+        return "B2B"
+
+    return "B2C"
+
+
+# =========================
+# REGION LOGIC
+# =========================
+EU = {"de", "fr", "it", "es", "be", "nl", "at", "pl", "pt", "cz"}
+
+
+def get_region(supplier, customer):
+
+    s = normalize_country(supplier)
+    c = normalize_country(customer)
+
+    if not s or not c:
+        return "UNKNOWN"
+
+    if s == c:
+        return "Domestic"
+
+    if s in EU and c in EU:
+        return "Non-Domestic-EU"
+
+    return "Non-EU"
+
+
+# =========================
+# VAT CHECK
+# =========================
+def is_vat_charged(inv):
+    try:
+        return float(inv.get("tax_amount", 0)) > 0
+    except:
         return False
 
-    pattern = VAT_PATTERNS.get(country)
 
-    if not pattern:
-        return False
+# =========================
+# ENGINE
+# =========================
+def run_engine(inv):
 
-    return bool(re.match(pattern, vat))
+    # =========================
+    # 🔥 FIX: infer missing countries using suffix
+    # =========================
+    supplier_name = inv.get("supplier_name", "")
+    customer_name = inv.get("customer_name", "")
 
+    if not inv.get("supplier_country"):
+        inv["supplier_country"] = detect_country_by_suffix(supplier_name)
 
-def classify_vat(vat: str):
-    vat = normalize_vat(vat)
+    if not inv.get("customer_country"):
+        inv["customer_country"] = detect_country_by_suffix(customer_name)
 
-    if not vat:
-        return {
-            "valid": False,
-            "country": None,
-            "type": "MISSING"
-        }
+    customer_type = classify_customer(inv)
+    region = get_region(inv.get("supplier_country"), inv.get("customer_country"))
 
-    country = detect_vat_country(vat)
-    valid = is_valid_vat(vat)
+    supplier_vat = (inv.get("supplier_vat_id") or "").strip()
+    customer_vat = (inv.get("customer_vat_id") or "").strip()
+
+    reverse_charge = region == "Non-Domestic-EU"
+    vat_present = bool(supplier_vat and customer_vat)
+    vat_charged = is_vat_charged(inv)
+
+    errors = []
+    warnings = []
+
+    # ❌ Non-EU VAT charged
+    if region == "Non-EU" and vat_charged:
+        errors.append("🚨 VAT charged in Non-EU transaction (review required)")
+
+    # ❌ Reverse charge but VAT charged
+    if reverse_charge and vat_charged:
+        errors.append("🚨 VAT shall be 0% under reverse charge (EU intra-community supply)")
+
+    # ⚠️ VAT missing
+    if not vat_present:
+        warnings.append("⚠️ VAT missing (supplier or customer VAT ID missing) – review needed")
 
     return {
-        "valid": valid,
-        "country": country,
-        "type": "VALID" if valid else "INVALID"
+        "customer_type": customer_type,
+        "region": region,
+        "reverse_charge": reverse_charge,
+        "vat_present": vat_present,
+        "vat_charged": vat_charged,
+        "errors": errors,
+        "warnings": warnings
     }
 
 
 # =========================
-# STREAMLIT UI
+# UI
 # =========================
+uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
-st.set_page_config(page_title="EU VAT Checker", layout="centered")
+if uploaded_file:
 
-st.title("🧾 EU VAT Invoice Checker")
-st.write("Validate EU VAT numbers instantly (Germany, France, Italy, Spain, etc.)")
+    st.success("File uploaded ✔")
 
-# Single input mode
-vat_input = st.text_input("Enter VAT Number")
+    text = extract_text_from_pdf(uploaded_file)
 
-if vat_input:
-    result = classify_vat(vat_input)
-    st.subheader("Result")
-    st.json(result)
+    st.subheader("📄 Extracted Text")
+    st.text(text)
 
+    st.write("📏 Text length:", len(text))
 
-st.divider()
+    if len(text) < 10:
+        st.error("No readable text found")
+        st.stop()
 
-# Batch mode
-st.subheader("Batch VAT Checker")
+    st.info("Extracting invoice data...")
 
-vat_list = st.text_area(
-    "Enter multiple VAT numbers (one per line)",
-    height=150
-)
+    inv = extract_invoice_data(text)
 
-if st.button("Validate Batch"):
-    vats = [v.strip() for v in vat_list.split("\n") if v.strip()]
+    st.info("Running VAT engine...")
 
-    results = []
+    result = run_engine(inv)
 
-    for v in vats:
-        r = classify_vat(v)
-        results.append({
-            "VAT": v,
-            "Country": r["country"],
-            "Status": r["type"],
-            "Valid": r["valid"]
-        })
+    # =========================
+    # OUTPUT
+    # =========================
+    st.subheader("📊 Invoice Analysis")
 
-    st.table(results)
+    st.write(f"👤 Customer Type: **{result['customer_type']}**")
+    st.write(f"🌍 Region: **{result['region']}**")
+    st.write(f"🔁 Reverse Charge: **{'YES' if result['reverse_charge'] else 'NO'}**")
+    st.write(f"💰 VAT Present: **{'YES' if result['vat_present'] else 'NO'}**")
 
+    # =========================
+    # ERRORS
+    # =========================
+    for e in result["errors"]:
+        st.error(e)
 
-# =========================
-# TEST SECTION (OPTIONAL)
-# =========================
+    # =========================
+    # WARNINGS
+    # =========================
+    for w in result["warnings"]:
+        st.warning(w)
 
-st.divider()
-st.subheader("Sample Test Data")
-
-test_vats = [
-    "ATU12345678",
-    "NL123456789B01",
-    "ESX1234567X",
-    "DE123456789",
-    "FRXX123456789",
-]
-
-for v in test_vats:
-    st.write(v, classify_vat(v))
+    # =========================
+    # SUCCESS
+    # =========================
+    if not result["errors"] and not result["warnings"]:
+        st.success("✔ Invoice compliant (no issues detected)")
