@@ -1,6 +1,6 @@
 import re
 
-# ---------------- CLEAN TEXT ---------------- #
+# ---------------- CLEAN ---------------- #
 
 def clean(text):
     return text.upper() if text else ""
@@ -15,54 +15,55 @@ def extract_vat(text):
         return vat, vat[:2]
     return None, None
 
-# ---------------- SELLER / BUYER EXTRACTION ---------------- #
-
-def extract_parties(text):
-
-    text = clean(text)
-
-    # SELLER
-    seller_block = ""
-    buyer_block = ""
-
-    if "SELLER" in text or "SUPPLIER" in text:
-        seller_block = text.split("SELLER")[-1].split("BUYER")[0]
-
-    if "BUYER" in text:
-        buyer_block = text.split("BUYER")[-1]
-
-    return seller_block, buyer_block
-
-# ---------------- COUNTRY DETECTION ---------------- #
+# ---------------- FIX: COUNTRY DETECTION ---------------- #
 
 def detect_country(text):
 
     text = clean(text)
 
-    if "POLAND" in text or "PL" in text:
-        return "PL"
-    if "FRANCE" in text or "FR" in text:
+    if "FRANCE" in text:
         return "FR"
-    if "ITALY" in text or "IT" in text:
+    if "POLAND" in text:
+        return "PL"
+    if "ITALY" in text:
         return "IT"
-    if "NORWAY" in text or "NO" in text:
+    if "NORWAY" in text:
         return "NO"
+    if "SPAIN" in text:
+        return "ES"
 
     return None
 
-# ---------------- VAT RATE OCR ---------------- #
+# ---------------- FIX: SELLER / BUYER EXTRACTION ---------------- #
+
+def extract_seller_buyer(text):
+
+    text = clean(text)
+
+    seller = ""
+    buyer = ""
+
+    # Try structured OCR first
+    if "SELLER" in text or "SPRZEDAWCA" in text:
+        seller = text.split("SPRZEDAWCA")[-1]
+
+    if "BUYER" in text or "NABYWCA" in text:
+        buyer = text.split("NABYWCA")[-1]
+
+    # fallback if OCR messy
+    if not seller:
+        seller = text
+    if not buyer:
+        buyer = text
+
+    return seller, buyer
+
+# ---------------- VAT RATE (ONLY OCR) ---------------- #
 
 def extract_vat_rate(text):
     text = clean(text)
     match = re.search(r"(\d{1,2}(\.\d+)?)\s*%", text)
     return float(match.group(1)) if match else None
-
-# ---------------- B2B CHECK ---------------- #
-
-def is_b2b(text):
-    text = clean(text)
-    keywords = ["GMBH", "SARL", "SRL", "LTD", "LIMITED", "SP Z OO", "AS"]
-    return any(k in text for k in keywords)
 
 # ---------------- MAIN ENGINE ---------------- #
 
@@ -70,35 +71,34 @@ def analyze_invoice(text):
 
     text = clean(text)
 
-    seller_block, buyer_block = extract_parties(text)
+    seller_text, buyer_text = extract_seller_buyer(text)
 
-    # fallback if OCR not structured
-    seller_block = seller_block or text
-    buyer_block = buyer_block or text
+    # COUNTRY
+    supplier_country = detect_country(seller_text)
+    customer_country = detect_country(buyer_text)
 
-    supplier_country = detect_country(seller_block)
-    customer_country = detect_country(buyer_block)
-
-    supplier_vat, _ = extract_vat(seller_block)
-    customer_vat, _ = extract_vat(buyer_block)
+    # VAT IDS (FIX: must read PL123 etc)
+    supplier_vat, _ = extract_vat(seller_text)
+    customer_vat, _ = extract_vat(buyer_text)
 
     vat_rate = extract_vat_rate(text)
 
-    customer_type = "B2B" if is_b2b(text) else "B2C"
+    # B2B LOGIC (simple heuristic)
+    customer_type = "B2B" if any(x in text for x in ["GMBH", "SARL", "SRL", "LTD"]) else "B2C"
 
-    # ---------------- REVERSE CHARGE LOGIC ---------------- #
+    # ---------------- REVERSE CHARGE (IMPORTANT FIX) ---------------- #
     reverse_charge = (
         supplier_country is not None and
         customer_country is not None and
         supplier_country != customer_country
     )
 
-    # ---------------- VAT STATUS (ONLY OCR) ---------------- #
+    # ---------------- VAT STATUS (OCR ONLY) ---------------- #
     vat_status = f"VAT CHARGED ({vat_rate}%)" if vat_rate else "VAT NOT FOUND"
 
     # ---------------- COMPLIANCE ---------------- #
     if reverse_charge and vat_rate:
-        compliance = "NOT COMPLIANT (Reverse charge applicable but VAT charged)"
+        compliance = "NOT COMPLIANT (Reverse Charge should apply)"
     else:
         compliance = "COMPLIANT"
 
