@@ -18,7 +18,7 @@ def extract_text_from_pdf(file):
 
 
 # =========================
-# amount parser (EU safe)
+# amount parser (kept for future use)
 # =========================
 def parse_amount(value):
     if value is None:
@@ -27,7 +27,6 @@ def parse_amount(value):
     value = str(value).strip()
     value = re.sub(r"[^\d,.\-]", "", value)
 
-    # EU format fix: 1.000,00 → 1000.00
     if "," in value and "." in value:
         if value.rfind(",") > value.rfind("."):
             value = value.replace(".", "")
@@ -56,7 +55,11 @@ supplier_name, supplier_country, supplier_vat_id,
 customer_name, customer_country, customer_vat_id,
 invoice_number, invoice_date, currency,
 net_amount, tax_amount, gross_amount,
-items (array with category if possible)
+items
+
+IMPORTANT:
+- Fix OCR mistakes where possible (e.g. SPRZEDAWCA = VAT ID)
+- Do not hallucinate VAT numbers
 
 Invoice:
 {text}
@@ -75,7 +78,7 @@ Invoice:
 
 
 # =========================
-# COUNTRY NORMALIZER (FULL + SHORT CODES)
+# COUNTRY NORMALIZER
 # =========================
 def normalize_country(c):
     if not c:
@@ -84,34 +87,15 @@ def normalize_country(c):
     c = c.strip().lower()
 
     mapping = {
-        # Germany
         "germany": "de", "de": "de",
-
-        # France
         "france": "fr", "fr": "fr",
-
-        # Italy
         "italy": "it", "it": "it",
-
-        # Spain
         "spain": "es", "es": "es",
-
-        # Belgium
         "belgium": "be", "be": "be",
-
-        # Netherlands
         "netherlands": "nl", "nl": "nl",
-
-        # Austria
         "austria": "at", "at": "at",
-
-        # Poland
         "poland": "pl", "pl": "pl",
-
-        # Portugal
         "portugal": "pt", "pt": "pt",
-
-        # Czech Republic
         "czech republic": "cz", "cz": "cz"
     }
 
@@ -137,26 +121,12 @@ def classify_customer(inv):
 
 
 # =========================
-# EU VAT RATES (BY COUNTRY CODE)
+# EU COUNTRIES
 # =========================
-EU_VAT_RATES = {
-    "de": 0.19,
-    "fr": 0.20,
-    "it": 0.22,
-    "es": 0.21,
-    "be": 0.21,
-    "nl": 0.21,
-    "at": 0.20,
-    "pl": 0.23,
-    "pt": 0.23,
-    "cz": 0.21
+EU_COUNTRIES = {
+    "de", "fr", "it", "es", "be",
+    "nl", "at", "pl", "pt", "cz"
 }
-
-
-# =========================
-# EU SET
-# =========================
-EU_COUNTRIES = set(EU_VAT_RATES.keys())
 
 
 # =========================
@@ -177,41 +147,17 @@ def get_region(supplier, customer):
 
 
 # =========================
-# REVERSE CHARGE (EU RULES)
+# REVERSE CHARGE
 # =========================
-def is_reverse_charge(inv, customer_type):
-
-    supplier = normalize_country(inv.get("supplier_country"))
-    customer = normalize_country(inv.get("customer_country"))
-    vat_id = (inv.get("customer_vat_id") or "").strip()
-
-    # ❌ NEVER domestic reverse charge
-    if supplier == customer:
-        return False
-
-    # ✔ EU cross-border B2B only
-    return (
-        supplier in EU_COUNTRIES and
-        customer in EU_COUNTRIES and
-        customer_type == "B2B" and
-        vat_id
-    )
+def is_reverse_charge(region):
+    return region == "Non-Domestic-EU"
 
 
 # =========================
-# VAT validation
+# VAT VALIDATION (SIMPLIFIED)
 # =========================
-def validate_vat(net, tax, rate):
-    expected = round(net * rate, 2)
-    return abs(expected - tax) < 0.05
-
-
-# =========================
-# VAT lookup
-# =========================
-def get_standard_vat(country):
-    country = normalize_country(country)
-    return EU_VAT_RATES.get(country)
+def validate_vat_presence(supplier_vat, customer_vat):
+    return bool(supplier_vat and customer_vat)
 
 
 # =========================
@@ -221,23 +167,12 @@ def run_engine(inv):
 
     customer_type = classify_customer(inv)
     region = get_region(inv.get("supplier_country"), inv.get("customer_country"))
-    reverse_charge = is_reverse_charge(inv, customer_type)
 
-    net = parse_amount(inv.get("net_amount"))
-    tax = parse_amount(inv.get("tax_amount"))
+    supplier_vat = (inv.get("supplier_vat_id") or "").strip()
+    customer_vat = (inv.get("customer_vat_id") or "").strip()
 
-    supplier_country = normalize_country(inv.get("supplier_country"))
-
-    # VAT logic
-    if reverse_charge:
-        vat_rate = 0.0
-    else:
-        vat_rate = get_standard_vat(supplier_country)
-
-        if vat_rate is None:
-            vat_rate = tax / net if net else 0.0
-
-    vat_correct = validate_vat(net, tax, vat_rate)
+    reverse_charge = is_reverse_charge(region)
+    vat_correct = validate_vat_presence(supplier_vat, customer_vat)
 
     return {
         "customer_type": customer_type,
@@ -276,9 +211,9 @@ if uploaded_file:
         st.write(f"💰 VAT Correct: **{'YES' if result['vat_correct'] else 'NO'}**")
 
         if result["vat_correct"]:
-            st.success("✅ Invoice is compliant")
+            st.success("✅ Invoice OK (VAT IDs present)")
         else:
-            st.warning("⚠️ Invoice needs review")
+            st.warning("⚠️ Missing VAT information")
 
     except Exception as e:
         st.error(f"Error: {e}")
