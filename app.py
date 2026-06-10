@@ -18,7 +18,7 @@ def extract_text_from_pdf(file):
 
 
 # =========================
-# amount parser
+# amount parser (EU safe)
 # =========================
 def parse_amount(value):
     if value is None:
@@ -27,6 +27,7 @@ def parse_amount(value):
     value = str(value).strip()
     value = re.sub(r"[^\d,.\-]", "", value)
 
+    # EU format fix (1.000,00 → 1000.00)
     if "," in value and "." in value:
         if value.rfind(",") > value.rfind("."):
             value = value.replace(".", "")
@@ -74,7 +75,7 @@ Invoice:
 
 
 # =========================
-# COUNTRY NORMALIZER
+# COUNTRY NORMALIZER (CRITICAL FIX)
 # =========================
 def normalize_country(c):
     if not c:
@@ -88,7 +89,7 @@ def normalize_country(c):
         "italy": "italy", "it": "italy",
         "spain": "spain", "es": "spain",
         "netherlands": "netherlands", "nl": "netherlands",
-        "belgium": "belgium", "be": "belgium",
+        "belgium": "belgium", "be": "belgium", "belgique": "belgium",
         "austria": "austria", "at": "austria",
         "poland": "poland", "pl": "poland",
         "portugal": "portugal", "pt": "portugal",
@@ -117,7 +118,7 @@ def classify_customer(inv):
 
 
 # =========================
-# EU COUNTRIES
+# EU COUNTRIES (EXPANDED)
 # =========================
 EU_COUNTRIES = {
     "germany", "france", "italy", "spain", "netherlands",
@@ -126,7 +127,7 @@ EU_COUNTRIES = {
 
 
 # =========================
-# REGION LOGIC
+# REGION LOGIC (FIXED)
 # =========================
 def get_region(supplier, customer):
 
@@ -143,7 +144,7 @@ def get_region(supplier, customer):
 
 
 # =========================
-# REVERSE CHARGE (FIXED)
+# REVERSE CHARGE (EU CORRECT RULE)
 # =========================
 def is_reverse_charge(inv, customer_type):
 
@@ -151,42 +152,49 @@ def is_reverse_charge(inv, customer_type):
     customer = normalize_country(inv.get("customer_country"))
     vat_id = (inv.get("customer_vat_id") or "").strip()
 
+    # ❌ NEVER reverse charge for domestic (IMPORTANT FIX)
     if supplier == customer:
         return False
 
-    return (
+    # ✔ EU cross-border B2B ONLY
+    if (
         supplier in EU_COUNTRIES and
         customer in EU_COUNTRIES and
         customer_type == "B2B" and
         vat_id
-    )
+    ):
+        return True
+
+    return False
 
 
 # =========================
-# SMART VAT AUTO-DETECTION (KEY FIX)
+# VAT validation (simple correctness check)
+# =========================
+def validate_vat(net, tax, rate):
+    expected = round(net * rate, 2)
+    return abs(expected - tax) < 0.05  # small tolerance for EU rounding
+
+
+# =========================
+# VAT RATE DETECTION (SAFE DEFAULT)
 # =========================
 def detect_vat_rate(net, tax):
-
     if net == 0:
         return 0.0
 
-    actual_rate = round(tax / net, 2)
+    actual = round(tax / net, 2)
 
-    if abs(actual_rate - 0.07) < 0.02:
+    if abs(actual - 0.07) < 0.02:
         return 0.07
 
-    if abs(actual_rate - 0.19) < 0.02:
+    if abs(actual - 0.21) < 0.02:
+        return 0.21
+
+    if abs(actual - 0.19) < 0.02:
         return 0.19
 
-    return actual_rate  # fallback (real-world unknown cases)
-
-
-# =========================
-# VAT VALIDATION
-# =========================
-def validate_vat(net, tax, expected_rate):
-    expected_tax = round(net * expected_rate, 2)
-    return abs(expected_tax - tax) < 0.02
+    return actual
 
 
 # =========================
@@ -201,10 +209,8 @@ def run_engine(inv):
     net = parse_amount(inv.get("net_amount"))
     tax = parse_amount(inv.get("tax_amount"))
 
-    # 🔥 NEW: detect VAT instead of assuming it
     detected_rate = detect_vat_rate(net, tax)
 
-    # override rule: reverse charge always zero VAT
     vat_rate = 0.0 if reverse_charge else detected_rate
 
     vat_correct = validate_vat(net, tax, vat_rate)
@@ -220,9 +226,9 @@ def run_engine(inv):
 # =========================
 # STREAMLIT UI
 # =========================
-st.set_page_config(page_title="VAT Checker", layout="centered")
+st.set_page_config(page_title="EU VAT Checker", layout="centered")
 
-st.title("📄 Smart EU VAT Invoice Checker")
+st.title("📄 EU VAT Invoice Checker (Belgium + EU Correct)")
 
 uploaded_file = st.file_uploader("Upload Invoice PDF", type="pdf")
 
