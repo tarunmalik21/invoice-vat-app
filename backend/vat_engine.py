@@ -1,27 +1,54 @@
 import re
 
 # =========================================================
-# 1. COUNTRY DETECTION (VAT + TEXT BASED, MORE RELIABLE)
+# 1. SECTION EXTRACTION (SELLER / BUYER)
+# =========================================================
+
+def get_block(text, start_keywords, end_keywords=None):
+    """
+    Extracts seller/buyer section from invoice text.
+    """
+    text = text.upper()
+
+    start_pos = -1
+
+    for kw in start_keywords:
+        if kw in text:
+            start_pos = text.find(kw)
+            break
+
+    if start_pos == -1:
+        return text
+
+    if not end_keywords:
+        return text[start_pos:]
+
+    end_pos = len(text)
+
+    for kw in end_keywords:
+        if kw in text[start_pos:]:
+            end_pos = text.find(kw, start_pos)
+            break
+
+    return text[start_pos:end_pos]
+
+
+# =========================================================
+# 2. COUNTRY DETECTION (VAT + TEXT)
 # =========================================================
 
 VAT_PREFIXES = ["DE", "FR", "IT", "ES", "PL", "NL", "BE", "AT"]
 
-
 def detect_country(text: str):
-    """
-    Detect EU country from VAT prefix or text.
-    Works even if only VAT number exists.
-    """
-
     text = text.upper()
 
-    # 1. Try VAT prefix detection (BEST METHOD)
+    # Detect VAT prefix
     for code in VAT_PREFIXES:
         if re.search(rf"\b{code}[0-9A-Z]", text):
             return code
 
-    # 2. Fallback: country name detection
-    country_names = {
+    # Detect country names
+    country_map = {
         "GERMANY": "DE",
         "FRANCE": "FR",
         "ITALY": "IT",
@@ -32,7 +59,7 @@ def detect_country(text: str):
         "AUSTRIA": "AT",
     }
 
-    for name, code in country_names.items():
+    for name, code in country_map.items():
         if name in text:
             return code
 
@@ -40,7 +67,34 @@ def detect_country(text: str):
 
 
 # =========================================================
-# 2. B2B / B2C CLASSIFIER
+# 3. VAT EXTRACTION
+# =========================================================
+
+VAT_PATTERNS = {
+    "DE": r"DE[0-9]{9}",
+    "FR": r"FR[0-9A-Z]{2}[0-9]{9}",
+    "IT": r"IT[0-9]{11}",
+    "ES": r"ES[A-Z0-9]{9}",
+    "PL": r"PL[0-9]{10}",
+    "NL": r"NL[0-9A-Z]{9}B[0-9]{2}",
+    "BE": r"BE[0-9]{10}",
+    "AT": r"ATU[0-9]{8}",
+}
+
+
+def extract_vat(text: str):
+    text = text.upper()
+
+    for country, pattern in VAT_PATTERNS.items():
+        match = re.search(pattern, text)
+        if match:
+            return match.group(), country
+
+    return None, None
+
+
+# =========================================================
+# 4. B2B CLASSIFICATION
 # =========================================================
 
 B2B_KEYWORDS = [
@@ -64,34 +118,7 @@ def classify_customer(text: str):
 
 
 # =========================================================
-# 3. VAT EXTRACTION
-# =========================================================
-
-VAT_PATTERN = {
-    "DE": r"DE[0-9]{9}",
-    "FR": r"FR[0-9A-Z]{2}[0-9]{9}",
-    "IT": r"IT[0-9]{11}",
-    "ES": r"ES[A-Z0-9]{9}",
-    "NL": r"NL[0-9A-Z]{9}B[0-9]{2}",
-    "PL": r"PL[0-9]{10}",
-    "BE": r"BE[0-9]{10}",
-    "AT": r"ATU[0-9]{8}",
-}
-
-
-def extract_vat(text: str):
-    text = text.upper()
-
-    for country, pattern in VAT_PATTERN.items():
-        match = re.search(pattern, text)
-        if match:
-            return match.group(), country
-
-    return None, None
-
-
-# =========================================================
-# 4. MAIN ENGINE (EU VAT LOGIC)
+# 5. MAIN ENGINE (FIXED EU VAT LOGIC)
 # =========================================================
 
 def analyze_invoice(text: str):
@@ -99,15 +126,34 @@ def analyze_invoice(text: str):
     text = text.upper()
 
     # -----------------------------
-    # Extract parties (simplified)
+    # SPLIT SELLER / BUYER (FIXED)
     # -----------------------------
-    supplier_country = detect_country(text)
-    customer_country = detect_country(text)
+    seller_text = get_block(
+        text,
+        ["SELLER", "SUPPLIER", "SPRZEDAWCA"]
+    )
 
-    supplier_vat, _ = extract_vat(text)
-    customer_vat, _ = extract_vat(text)
+    buyer_text = get_block(
+        text,
+        ["BUYER", "CUSTOMER", "NABYWCA"]
+    )
 
-    customer_type = classify_customer(text)
+    # -----------------------------
+    # SELLER DATA
+    # -----------------------------
+    supplier_country = detect_country(seller_text)
+    supplier_vat, _ = extract_vat(seller_text)
+
+    # -----------------------------
+    # BUYER DATA
+    # -----------------------------
+    customer_country = detect_country(buyer_text)
+    customer_vat, _ = extract_vat(buyer_text)
+
+    # -----------------------------
+    # CUSTOMER TYPE
+    # -----------------------------
+    customer_type = classify_customer(buyer_text)
 
     # -----------------------------
     # DEFAULT OUTPUT
@@ -126,36 +172,34 @@ def analyze_invoice(text: str):
     )
 
     # =====================================================
-    # RULE ENGINE (EU VAT CORE LOGIC)
+    # EU VAT RULE ENGINE
     # =====================================================
 
     if customer_type == "B2B":
 
-        # CASE 1: Cross-border EU B2B → Reverse charge applies
+        # CROSS BORDER EU → REVERSE CHARGE
         if cross_border:
             reverse_charge = True
             vat_status = "REVERSE CHARGE"
 
             # If VAT missing → NOT COMPLIANT
-            if not customer_vat or not supplier_vat:
+            if not supplier_vat or not customer_vat:
                 compliance = "NOT COMPLIANT"
 
-        # CASE 2: Domestic B2B
+        # DOMESTIC B2B
         else:
             reverse_charge = False
 
-            # Missing VAT = problem
-            if not customer_vat or not supplier_vat:
+            if not supplier_vat or not customer_vat:
                 vat_status = "MISSING VAT"
                 compliance = "NOT COMPLIANT"
 
     else:
-        # B2C rules
-        reverse_charge = False
         vat_status = "B2C TRANSACTION"
+        reverse_charge = False
 
     # -----------------------------
-    # FINAL RESULT
+    # FINAL OUTPUT
     # -----------------------------
     return {
         "customer_type": customer_type,
