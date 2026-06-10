@@ -23,21 +23,7 @@ COUNTRY_MAP = {
 NON_EU = {"NO", "CH", "GB", "US", "IN", "CN", "AE"}
 
 # =========================================================
-# VAT PATTERNS
-# =========================================================
-
-VAT_PATTERNS = {
-    "DE": r"DE[0-9]{9}",
-    "FR": r"FR[0-9A-Z]{2}[0-9]{9}",
-    "IT": r"IT[0-9]{11}",
-    "PL": r"PL[0-9]{10}",
-    "ES": r"ES[A-Z0-9]{9}",
-    "SE": r"SE[0-9]{12}",
-    "NL": r"NL[0-9A-Z]{9}B[0-9]{2}",
-}
-
-# =========================================================
-# STRICT SECTION EXTRACTION (CRITICAL FIX)
+# STRICT SECTION EXTRACTION
 # =========================================================
 
 def extract_section(text, start_keywords):
@@ -47,7 +33,6 @@ def extract_section(text, start_keywords):
         if k in text:
             section = text.split(k, 1)[1]
 
-            # Stop at next logical block
             end_markers = [
                 "BUYER", "CUSTOMER", "NABYWCA",
                 "SELLER", "SUPPLIER", "SPRZEDAWCA",
@@ -63,16 +48,43 @@ def extract_section(text, start_keywords):
     return ""
 
 # =========================================================
-# VAT EXTRACTION
+# VAT EXTRACTION (FIXED - OCR ROBUST)
 # =========================================================
 
 def extract_vat(text):
     text = text.upper()
 
-    for country, pattern in VAT_PATTERNS.items():
-        match = re.search(pattern, text)
-        if match:
-            return match.group(), country
+    # 1. Direct VAT patterns (highest priority)
+    patterns = [
+        r"\bDE[0-9]{9}\b",
+        r"\bFR[0-9A-Z]{2}[0-9]{9}\b",
+        r"\bIT[0-9]{11}\b",
+        r"\bPL[0-9]{10}\b",
+        r"\bES[A-Z0-9]{9}\b",
+        r"\bSE[0-9]{12}\b",
+        r"\bNL[0-9A-Z]{9}B[0-9]{2}\b",
+    ]
+
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            vat = m.group()
+            return vat, vat[:2]
+
+    # 2. Label-based extraction (IMPORTANT FIX)
+    label_patterns = [
+        r"VAT\s*ID[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
+        r"VAT\s*NUMBER[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
+        r"VAT\s*NO[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
+        r"UID[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
+        r"NIP[:\-]?\s*([A-Z]{2}[0-9A-Z]+)",
+    ]
+
+    for p in label_patterns:
+        m = re.search(p, text)
+        if m:
+            vat = m.group(1)
+            return vat, vat[:2]
 
     return None, None
 
@@ -86,7 +98,6 @@ def normalize_country(text, vat_country=None):
     if vat_country:
         return vat_country
 
-    # Norway OCR fix
     if "NORWAY" in text or "NORG" in text or "NORWEGEN" in text:
         return "NO"
 
@@ -97,14 +108,12 @@ def normalize_country(text, vat_country=None):
     return None
 
 # =========================================================
-# VAT RATE EXTRACTION
+# VAT RATE
 # =========================================================
 
 def extract_vat_rate(text):
     match = re.search(r"(\d{1,2}(\.\d+)?)\s*%", text)
-    if match:
-        return float(match.group(1))
-    return None
+    return float(match.group(1)) if match else None
 
 # =========================================================
 # B2B DETECTION
@@ -133,18 +142,21 @@ def analyze_invoice(text: str):
     text = text.upper()
 
     # =====================================================
-    # STEP 1: STRICT SECTION SPLIT (IMPORTANT FIX)
+    # SECTION EXTRACTION
     # =====================================================
     seller_text = extract_section(text, ["SELLER", "SUPPLIER", "SPRZEDAWCA"])
-    buyer_text = extract_section(text, ["BUYER", "CUSTOMER", "NABYWCA"])
+    buyer_text = extract_section(text, ["BUYER", "CUSTOMER", "NABYWCA", "BILL TO"])
 
     # =====================================================
-    # STEP 2: VAT EXTRACTION (ONLY FROM SELLER/BUYER BLOCKS)
+    # VAT EXTRACTION (BLOCK + FULL FALLBACK FIX)
     # =====================================================
     supplier_vat, supplier_vat_country = extract_vat(seller_text)
     customer_vat, customer_vat_country = extract_vat(buyer_text)
 
-    # FIX: missing VAT must be NONE
+    # 🔥 FALLBACK (CRITICAL FIX FOR OCR LAYOUT ISSUES)
+    if customer_vat is None:
+        customer_vat, customer_vat_country = extract_vat(text)
+
     if supplier_vat is None:
         supplier_vat = "NONE"
 
@@ -152,23 +164,27 @@ def analyze_invoice(text: str):
         customer_vat = "NONE"
 
     # =====================================================
-    # STEP 3: COUNTRY DETECTION (BLOCK ONLY)
+    # COUNTRY DETECTION
     # =====================================================
     supplier_country = normalize_country(seller_text, supplier_vat_country)
     customer_country = normalize_country(buyer_text, customer_vat_country)
 
+    # fallback safety
+    if customer_country is None and customer_vat_country:
+        customer_country = customer_vat_country
+
     # =====================================================
-    # STEP 4: VAT RATE (GLOBAL SIGNAL ONLY)
+    # VAT RATE
     # =====================================================
     vat_rate = extract_vat_rate(text)
 
     # =====================================================
-    # STEP 5: CUSTOMER TYPE
+    # CUSTOMER TYPE
     # =====================================================
     customer_type = "B2B" if is_b2b(buyer_text, customer_vat) else "B2C"
 
     # =====================================================
-    # STEP 6: CROSS BORDER CHECK
+    # CROSS BORDER
     # =====================================================
     cross_border = (
         supplier_country is not None and
@@ -177,10 +193,9 @@ def analyze_invoice(text: str):
     )
 
     # =====================================================
-    # STEP 7: RULE ENGINE
+    # RULE ENGINE
     # =====================================================
 
-    # CASE 1: VAT RATE PRESENT (HIGHEST PRIORITY)
     if vat_rate is not None and vat_rate > 0:
 
         reverse_charge = False
@@ -192,7 +207,6 @@ def analyze_invoice(text: str):
             vat_status = f"VAT CHARGED ({vat_rate}%)"
             compliance = "COMPLIANT"
 
-    # CASE 2: NON-EU SUPPLIER
     elif supplier_country in NON_EU:
 
         reverse_charge = False
@@ -204,7 +218,6 @@ def analyze_invoice(text: str):
             vat_status = "NON-EU SUPPLIER"
             compliance = "REQUIRES REVIEW"
 
-    # CASE 3: EU CROSS BORDER B2B
     elif customer_type == "B2B" and cross_border:
 
         reverse_charge = True
@@ -216,7 +229,6 @@ def analyze_invoice(text: str):
             vat_status = "REVERSE CHARGE (0% VAT)"
             compliance = "COMPLIANT"
 
-    # CASE 4: DOMESTIC B2B
     elif customer_type == "B2B" and supplier_country == customer_country:
 
         reverse_charge = False
@@ -228,14 +240,13 @@ def analyze_invoice(text: str):
             vat_status = "VAT CHARGED (DOMESTIC B2B)"
             compliance = "COMPLIANT"
 
-    # CASE 5: B2C
     else:
         reverse_charge = False
         vat_status = "B2C VAT APPLIES"
         compliance = "COMPLIANT"
 
     # =====================================================
-    # FINAL OUTPUT
+    # OUTPUT
     # =====================================================
 
     return {
