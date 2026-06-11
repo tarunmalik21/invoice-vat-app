@@ -16,7 +16,7 @@ streamlit
 pdf2image
 fastapi
 uvicorn
-
+pydantic
 
 
 
