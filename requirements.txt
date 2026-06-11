@@ -14,4 +14,9 @@ pillow
 pytesseract
 streamlit
 pdf2image
+fastapi
+uvicorn
+
+
+
 
